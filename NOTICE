@@ -1,0 +1,20 @@
+Resume Job Agent
+Copyright 2026 WhiteSailLabs
+
+This product includes modified source code from Resume Matcher:
+  https://github.com/srbhr/Resume-Matcher
+  Upstream revision used as the preserved history baseline: ab2b370
+  License: Apache License 2.0
+
+The China job-discovery adapter depends on jobfindsme:
+  https://github.com/russeell/jobfindsme
+  Pinned revision: b775df3a70ce492b2bb7643a3051f00ecc2c2582
+  License: MIT
+
+Resume Job Agent modifications include the job-discovery workflow, browser
+authorization adapter, approval and batch-generation queue, master-resume
+library, AI tailoring plan and audit, conversational refinement, change
+preview, and local setup/documentation changes.
+
+All upstream copyright and attribution notices remain applicable to the
+portions derived from their respective projects.

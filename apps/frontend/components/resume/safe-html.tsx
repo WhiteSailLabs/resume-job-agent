@@ -3,10 +3,8 @@ import { sanitizeHtml } from '@/lib/utils/html-sanitizer';
 import { cn } from '@/lib/utils';
 
 // No 'use client' — this component does no client-only work (no hooks, no
-// event handlers, no browser APIs). Sanitization runs on the server via
-// isomorphic-dompurify. Parent resume templates (resume-single-column,
-// resume-modern, etc.) are also Server Components, so this can render on
-// the server and stays out of the client bundle.
+// event handlers, no browser APIs). Sanitization is intentionally DOM-free so
+// the same component can render in Next.js and in the PDF print route.
 
 interface SafeHtmlProps {
   /** HTML content to render (will be sanitized) */

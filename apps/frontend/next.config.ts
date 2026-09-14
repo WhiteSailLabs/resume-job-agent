@@ -14,6 +14,9 @@ const REQUEST_TIMEOUT_MS = Number.isFinite(parsedTimeoutMs)
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Local users commonly open the app through 127.0.0.1 while Next reports
+  // localhost. Allow both so client bundles and interactions hydrate normally.
+  allowedDevOrigins: ['127.0.0.1', 'localhost'],
   experimental: {
     proxyTimeout: REQUEST_TIMEOUT_MS,
     // Tree-shake barrel imports — saves ~200-800ms cold start per route

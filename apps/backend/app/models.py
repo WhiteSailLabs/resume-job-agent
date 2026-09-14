@@ -40,11 +40,13 @@ class Resume(Base):
     parent_id: Mapped[str | None] = mapped_column(String, nullable=True)
     processed_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     processing_status: Mapped[str] = mapped_column(String, default="pending")
-    processing_token: Mapped[str | None] = mapped_column(String, nullable=True)
     cover_letter: Mapped[str | None] = mapped_column(Text, nullable=True)
     outreach_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     interview_prep: Mapped[str | None] = mapped_column(Text, nullable=True)
     title: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Kept separate from content so switching templates never reruns the LLM.
+    # Tailored resumes inherit this profile from their base resume.
+    render_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # original_markdown has *absence* semantics in the TinyDB era: the key was
     # omitted entirely when None. The facade reproduces that by only emitting
     # the key when this column is non-null.
@@ -54,8 +56,8 @@ class Resume(Base):
 
     __table_args__ = (
         # At most one master resume. Partial unique index enforces the invariant
-        # at the storage layer; the facade serializes compound designation
-        # changes with a SQLite writer transaction.
+        # at the storage layer; ``_master_resume_lock`` remains the primary
+        # (race-free) mechanism in the facade.
         Index(
             "ux_resumes_single_master",
             "is_master",
@@ -94,31 +96,32 @@ class Improvement(Base):
     tailored_resume_id: Mapped[str] = mapped_column(String, index=True)
     job_id: Mapped[str] = mapped_column(String)
     improvements: Mapped[list] = mapped_column(JSON, default=list)
+    tailoring_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    quality_audit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
 
 
-class TailoringPreview(Base):
-    """An accepted preview, bounded confirmation claim and immutable result."""
+class GenerationTask(Base):
+    """Durable batch-tailoring task.
 
-    __tablename__ = "tailoring_previews"
-    __table_args__ = (Index("ix_preview_compatibility", "source_id", "job_id", "payload_hash", "created_at"),)
+    A task owns a fixed base-resume id and a list of saved job ids.  Keeping
+    progress here makes batch generation recoverable if the browser closes.
+    """
 
-    improvements: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    __tablename__ = "generation_tasks"
 
-    preview_id: Mapped[str] = mapped_column(String, primary_key=True)
-    source_id: Mapped[str] = mapped_column(String, index=True)
-    job_id: Mapped[str] = mapped_column(String, index=True)
-    payload_hash: Mapped[str] = mapped_column(String)
-    source_hash: Mapped[str] = mapped_column(String)
-    job_hash: Mapped[str] = mapped_column(String)
-    created_at: Mapped[str] = mapped_column(String)
-    expires_at: Mapped[str] = mapped_column(String, index=True)
-    result_resume_id: Mapped[str | None] = mapped_column(
-        String, nullable=True, index=True
-    )
-    claim_token: Mapped[str | None] = mapped_column(String, nullable=True)
-    claim_expires_at: Mapped[str | None] = mapped_column(String, nullable=True)
-    response_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    task_id: Mapped[str] = mapped_column(String, primary_key=True)
+    resume_id: Mapped[str] = mapped_column(String, index=True)
+    job_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String, default="queued", index=True)
+    completed_job_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    generated_resume_ids: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    failed_jobs: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    current_stage: Mapped[str | None] = mapped_column(String, nullable=True)
+    current_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    stage_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
+    updated_at: Mapped[str] = mapped_column(String, default=_utcnow_iso)
 
 
 class Application(Base):

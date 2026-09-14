@@ -1,0 +1,4 @@
+allowBuilds:
+  # Native resolver used by the lint/build toolchain. Pinning this approval
+  # keeps non-interactive local installs, Docker, and CI reproducible.
+  unrs-resolver: true

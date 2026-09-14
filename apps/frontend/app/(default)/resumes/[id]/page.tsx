@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState, useRef, useLayoutEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -8,10 +8,15 @@ import Resume, { ResumeData } from '@/components/dashboard/resume-component';
 import {
   fetchResume,
   downloadResumePdf,
+  fetchResumeQuality,
   getResumePdfUrl,
+  getResumePdfPreviewUrl,
   deleteResume,
   retryProcessing,
   renameResume,
+  fetchJobDescription,
+  type ResumeQualityReport,
+  type ResumeRenderProfile,
 } from '@/lib/api/resume';
 import { useStatusCache } from '@/lib/context/status-cache';
 import {
@@ -23,27 +28,36 @@ import {
   Sparkles,
   Pencil,
   MessagesSquare,
+  Columns2,
+  ExternalLink,
+  MoreHorizontal,
+  Trash2,
 } from 'lucide-react';
 import { EnrichmentModal } from '@/components/enrichment/enrichment-modal';
+import { AiResumeChat } from '@/components/resume/ai-resume-chat';
+import { AiResumeChangePreview } from '@/components/resume/ai-resume-change-preview';
 import { useTranslations } from '@/lib/i18n';
 import { withLocalizedDefaultSections } from '@/lib/utils/section-helpers';
 import { useLanguage } from '@/lib/context/language-context';
 import { downloadBlobAsFile, openUrlInNewTab, sanitizeFilename } from '@/lib/utils/download';
-import { useOperationOwner } from '@/hooks/use-operation-owner';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed';
 
+const DEFAULT_RENDER_PROFILE: ResumeRenderProfile = {
+  engine: 'rendercv',
+  template: 'rendercv-engineering',
+};
+
+type JobContext = Awaited<ReturnType<typeof fetchJobDescription>>;
+
 export default function ResumeViewerPage() {
   const { t } = useTranslations();
-  const translationsRef = useRef(t);
-  useLayoutEffect(() => {
-    translationsRef.current = t;
-  }, [t]);
   const { uiLanguage } = useLanguage();
   const params = useParams();
   const router = useRouter();
   const { decrementResumes, setHasMasterResume } = useStatusCache();
   const [resumeData, setResumeData] = useState<ResumeData | null>(null);
+  const [aiProposal, setAiProposal] = useState<ResumeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null);
@@ -52,27 +66,25 @@ export default function ResumeViewerPage() {
   const [showDeleteSuccessDialog, setShowDeleteSuccessDialog] = useState(false);
   const [showDownloadSuccessDialog, setShowDownloadSuccessDialog] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [renameError, setRenameError] = useState<string | null>(null);
   const [showEnrichmentModal, setShowEnrichmentModal] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [resumeTitle, setResumeTitle] = useState<string | null>(null);
-  const renameBusyRef = useRef(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState('');
   const [isTailoredResume, setIsTailoredResume] = useState(false);
+  const [parentResumeId, setParentResumeId] = useState<string | null>(null);
+  const [renderProfile, setRenderProfile] = useState<ResumeRenderProfile>({
+    engine: 'rendercv',
+    template: 'rendercv-engineering',
+  });
+  const [qualityReport, setQualityReport] = useState<ResumeQualityReport | null>(null);
+  const [qualityStatus, setQualityStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const [jobContext, setJobContext] = useState<JobContext | null>(null);
+  const [jobContextError, setJobContextError] = useState(false);
 
   const resumeId = params?.id as string;
-  const {
-    begin: beginResumeLoad,
-    isCurrent: isCurrentResumeLoad,
-    invalidate: invalidateResumeLoad,
-  } = useOperationOwner(resumeId);
-  const { begin: beginRetry, isCurrent: isCurrentRetry } = useOperationOwner(resumeId);
-  const { begin: beginRename, isCurrent: isCurrentRename } = useOperationOwner(resumeId);
-  const { begin: beginDownload, isCurrent: isCurrentDownload } = useOperationOwner(resumeId);
-  const { begin: beginDelete, isCurrent: isCurrentDelete } = useOperationOwner(resumeId);
 
   const localizedResumeData = useMemo(() => {
     if (!resumeData) return null;
@@ -81,27 +93,12 @@ export default function ResumeViewerPage() {
 
   useEffect(() => {
     if (!resumeId) return;
-    setShowEnrichmentModal(false);
-    setIsRetrying(false);
-    setIsDownloading(false);
-    renameBusyRef.current = false;
-    setIsEditingTitle(false);
-    setEditingTitleValue('');
-    setRenameError(null);
-    setDownloadError(null);
-    setDeleteError(null);
-    setShowDeleteDialog(false);
-    setShowDeleteSuccessDialog(false);
-    setShowDownloadSuccessDialog(false);
-    const token = beginResumeLoad();
-    if (token === null) return;
 
     const loadResume = async () => {
       try {
         setLoading(true);
         setError(null);
         const data = await fetchResume(resumeId);
-        if (!isCurrentResumeLoad(token)) return;
 
         // Get processing status
         const status = (data.raw_resume?.processing_status || 'pending') as ProcessingStatus;
@@ -110,76 +107,84 @@ export default function ResumeViewerPage() {
         // Capture title for editable display (always set to clear stale state)
         setResumeTitle(data.title ?? null);
         setIsTailoredResume(Boolean(data.parent_id));
+        setParentResumeId(data.parent_id ?? null);
+        setRenderProfile(
+          data.render_profile ?? DEFAULT_RENDER_PROFILE
+        );
+
+        if (data.parent_id) {
+          fetchJobDescription(resumeId)
+            .then((job) => {
+              setJobContext(job);
+              setJobContextError(false);
+            })
+            .catch(() => {
+              setJobContext(null);
+              setJobContextError(true);
+            });
+        } else {
+          setJobContext(null);
+          setJobContextError(false);
+        }
+
+        setQualityStatus('loading');
+        fetchResumeQuality(resumeId)
+          .then((report) => {
+            setQualityReport(report);
+            setQualityStatus('ready');
+          })
+          .catch(() => {
+            setQualityReport(null);
+            setQualityStatus('error');
+          });
 
         // Prioritize processed_resume if available (structured JSON)
         if (data.processed_resume) {
           setResumeData(data.processed_resume as ResumeData);
           setError(null);
         } else if (status === 'failed') {
-          setError(translationsRef.current('resumeViewer.errors.processingFailed'));
+          setError(t('resumeViewer.errors.processingFailed'));
         } else if (status === 'processing') {
-          setError(translationsRef.current('resumeViewer.errors.stillProcessing'));
+          setError(t('resumeViewer.errors.stillProcessing'));
         } else if (data.raw_resume?.content) {
           // Try to parse raw_resume content as JSON (for tailored resumes stored as JSON)
           try {
             const parsed = JSON.parse(data.raw_resume.content);
             setResumeData(parsed as ResumeData);
           } catch {
-            setError(translationsRef.current('resumeViewer.errors.notProcessedYet'));
+            setError(t('resumeViewer.errors.notProcessedYet'));
           }
         } else {
-          setError(translationsRef.current('resumeViewer.errors.noDataAvailable'));
+          setError(t('resumeViewer.errors.noDataAvailable'));
         }
       } catch (err) {
-        if (!isCurrentResumeLoad(token)) return;
         console.error('Failed to load resume:', err);
-        setError(translationsRef.current('resumeViewer.errors.failedToLoad'));
+        setError(t('resumeViewer.errors.failedToLoad'));
       } finally {
-        if (isCurrentResumeLoad(token)) setLoading(false);
+        setLoading(false);
       }
     };
 
     loadResume();
     setIsMasterResume(localStorage.getItem('master_resume_id') === resumeId);
-  }, [resumeId, beginResumeLoad, isCurrentResumeLoad]);
+  }, [resumeId, t]);
 
   const handleRetryProcessing = async () => {
     if (!resumeId) return;
-    const token = beginRetry();
-    if (token === null) return;
     setIsRetrying(true);
     try {
       const result = await retryProcessing(resumeId);
-      if (!isCurrentRetry(token)) return;
-      setProcessingStatus(result.processing_status);
       if (result.processing_status === 'ready') {
         // Reload the page to show the processed resume
         window.location.reload();
       } else {
-        setError(
-          t(
-            result.processing_status === 'failed'
-              ? 'resumeViewer.errors.processingFailed'
-              : 'resumeViewer.errors.stillProcessing'
-          )
-        );
-      }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('status 404')) {
-        if (localStorage.getItem('master_resume_id') === resumeId) {
-          localStorage.removeItem('master_resume_id');
-          setHasMasterResume(false);
-        }
-        if (!isCurrentRetry(token)) return;
-        setProcessingStatus(null);
-        setError(t('common.resumeDeleted'));
-      } else {
-        if (!isCurrentRetry(token)) return;
-        console.error('Retry processing failed:', err);
         setError(t('resumeViewer.errors.processingFailed'));
       }
+    } catch (err) {
+      console.error('Retry processing failed:', err);
+      setError(t('resumeViewer.errors.processingFailed'));
     } finally {
-      if (isCurrentRetry(token)) setIsRetrying(false);
+      setIsRetrying(false);
     }
   };
 
@@ -192,29 +197,18 @@ export default function ResumeViewerPage() {
   };
 
   const handleTitleSave = async () => {
-    if (renameBusyRef.current) return;
     const trimmed = editingTitleValue.trim();
     if (!trimmed || trimmed === resumeTitle) {
       setIsEditingTitle(false);
       return;
     }
-    const token = beginRename();
-    if (token === null) return;
-    renameBusyRef.current = true;
-    setIsEditingTitle(false);
     try {
-      setRenameError(null);
       await renameResume(resumeId, trimmed);
-      if (!isCurrentRename(token)) return;
       setResumeTitle(trimmed);
-      setIsEditingTitle(false);
     } catch (err) {
-      if (!isCurrentRename(token)) return;
       console.error('Failed to rename resume:', err);
-      setRenameError(t('resumeViewer.errors.failedToRename'));
-    } finally {
-      if (isCurrentRename(token)) renameBusyRef.current = false;
     }
+    setIsEditingTitle(false);
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -226,79 +220,59 @@ export default function ResumeViewerPage() {
   };
 
   // Reload resume data after enrichment
-  const reloadResumeData = async (): Promise<boolean> => {
-    const token = beginResumeLoad();
-    if (token === null) return false;
+  const reloadResumeData = async () => {
     try {
       const data = await fetchResume(resumeId);
-      if (!isCurrentResumeLoad(token)) return false;
-      if (!data.processed_resume) throw new Error('Refreshed resume has no processed data');
-      setResumeData(data.processed_resume as ResumeData);
-      setError(null);
-      return true;
+      if (data.processed_resume) {
+        setResumeData(data.processed_resume as ResumeData);
+        setError(null);
+      }
     } catch (err) {
-      if (!isCurrentResumeLoad(token)) return false;
       console.error('Failed to reload resume:', err);
-      throw err;
     }
   };
 
-  const handleEnrichmentComplete = async (): Promise<boolean> => {
-    const refreshed = await reloadResumeData();
-    if (refreshed) setShowEnrichmentModal(false);
-    return refreshed;
-  };
-
-  const handleEnrichmentClose = () => {
-    invalidateResumeLoad();
+  const handleEnrichmentComplete = () => {
     setShowEnrichmentModal(false);
+    reloadResumeData();
   };
 
   const handleDownload = async () => {
-    const token = beginDownload();
-    if (token === null) return;
     setIsDownloading(true);
     try {
-      setDownloadError(null);
       const blob = await downloadResumePdf(resumeId, undefined, uiLanguage);
       const filename = sanitizeFilename(resumeTitle, resumeId, 'resume');
       downloadBlobAsFile(blob, filename);
-      if (!isCurrentDownload(token)) return;
       setShowDownloadSuccessDialog(true);
     } catch (err) {
-      if (!isCurrentDownload(token)) return;
       console.error('Failed to download resume:', err);
       if (err instanceof TypeError && err.message.includes('Failed to fetch')) {
         const fallbackUrl = getResumePdfUrl(resumeId, undefined, uiLanguage);
         const didOpen = openUrlInNewTab(fallbackUrl);
         if (!didOpen) {
-          setDownloadError(t('common.popupBlocked', { url: fallbackUrl }));
+          alert(t('common.popupBlocked', { url: fallbackUrl }));
         }
         return;
       }
-      setDownloadError(t('resumeViewer.errors.failedToDownload'));
+      alert(t('builder.alerts.downloadFailed'));
     } finally {
-      if (isCurrentDownload(token)) setIsDownloading(false);
+      setIsDownloading(false);
     }
   };
 
   const handleDeleteResume = async () => {
-    const token = beginDelete();
-    if (token === null) return;
     try {
       setDeleteError(null);
       await deleteResume(resumeId);
       // Update cached counters
       decrementResumes();
-      if (localStorage.getItem('master_resume_id') === resumeId) {
+      if (isMasterResume) {
         localStorage.removeItem('master_resume_id');
         setHasMasterResume(false);
       }
-      if (!isCurrentDelete(token)) return;
       setShowDeleteDialog(false);
       setShowDeleteSuccessDialog(true);
     } catch (err) {
-      if (!isCurrentDelete(token)) return;
       console.error('Failed to delete resume:', err);
       setDeleteError(t('resumeViewer.errors.failedToDelete'));
       setShowDeleteDialog(false);
@@ -307,7 +281,7 @@ export default function ResumeViewerPage() {
 
   const handleDeleteSuccessConfirm = () => {
     setShowDeleteSuccessDialog(false);
-    router.push('/dashboard');
+    router.push('/resumes');
   };
 
   const handleDownloadSuccessConfirm = () => {
@@ -332,8 +306,8 @@ export default function ResumeViewerPage() {
             ? t('confirmations.deleteMasterResumeDescription')
             : t('confirmations.deleteResumeFromSystemDescription')
         }
-        confirmLabel={t('confirmations.deleteResumeConfirmLabel')}
-        cancelLabel={t('confirmations.keepResumeCancelLabel')}
+        confirmLabel="确认删除"
+        cancelLabel="保留简历"
         onConfirm={handleDeleteResume}
         variant="danger"
       />
@@ -347,7 +321,7 @@ export default function ResumeViewerPage() {
             ? t('resumeViewer.deletedDescriptionMaster')
             : t('resumeViewer.deletedDescriptionRegular')
         }
-        confirmLabel={t('resumeViewer.returnToDashboard')}
+        confirmLabel="返回简历库"
         onConfirm={handleDeleteSuccessConfirm}
         variant="success"
         showCancelButton={false}
@@ -359,11 +333,10 @@ export default function ResumeViewerPage() {
           onOpenChange={() => setDeleteError(null)}
           title={t('resumeViewer.deleteFailedTitle')}
           description={deleteError}
-          confirmLabel={t('common.retry')}
-          cancelLabel={t('common.cancel')}
-          onConfirm={handleDeleteResume}
-          onCancel={() => setDeleteError(null)}
+          confirmLabel="知道了"
+          onConfirm={() => setDeleteError(null)}
           variant="danger"
+          showCancelButton={false}
         />
       )}
     </>
@@ -374,7 +347,7 @@ export default function ResumeViewerPage() {
       <div className="min-h-screen flex flex-col items-center justify-center bg-background">
         <Loader2 className="w-10 h-10 animate-spin text-blue-700 mb-4" />
         <p className="font-mono text-sm font-bold uppercase text-blue-700">
-          {t('resumeViewer.loading')}
+          正在加载简历…
         </p>
       </div>
     );
@@ -419,19 +392,19 @@ export default function ResumeViewerPage() {
                     {isRetrying ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        {t('common.processing')}
+                        正在重试…
                       </>
                     ) : (
-                      t('resumeViewer.retryProcessing')
+                      '重新解析'
                     )}
                   </Button>
                   <Button variant="destructive" onClick={() => setShowDeleteDialog(true)}>
-                    {t('resumeViewer.deleteAndStartOver')}
+                    删除这份简历
                   </Button>
                 </>
               )}
-              <Button variant="outline" onClick={() => router.push('/dashboard')}>
-                {t('resumeViewer.returnToDashboard')}
+              <Button variant="outline" onClick={() => router.push('/resumes')}>
+                返回简历库
               </Button>
             </div>
           </div>
@@ -442,36 +415,51 @@ export default function ResumeViewerPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background py-12 px-4 md:px-8 overflow-y-auto">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-background py-8 px-4 md:px-6 overflow-y-auto">
+      <div className="mx-auto max-w-[108rem]">
         {/* Header Actions */}
-        <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 no-print">
-          <Button variant="outline" onClick={() => router.push('/dashboard')}>
+        <div className="mb-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 no-print">
+          <Button variant="outline" onClick={() => router.push(isTailoredResume ? '/jobs' : '/resumes')}>
             <ArrowLeft className="w-4 h-4" />
-            {t('nav.backToDashboard')}
+            {isTailoredResume ? '返回岗位列表' : '返回简历库'}
           </Button>
 
-          <div className="flex gap-3">
+          <div className="flex w-full flex-wrap gap-2 md:w-auto md:justify-end">
             {isMasterResume && (
               <Button onClick={() => setShowEnrichmentModal(true)} className="gap-2">
                 <Sparkles className="w-4 h-4" />
-                {t('resumeViewer.enhanceResume')}
+                AI 完善主简历
               </Button>
             )}
             <Button variant="outline" onClick={handleEdit}>
               <Edit className="w-4 h-4" />
-              {t('dashboard.editResume')}
+              编辑内容
             </Button>
-            {isTailoredResume && (
-              <Button variant="outline" onClick={handleInterviewPrep}>
-                <MessagesSquare className="w-4 h-4" />
-                {t('interviewPrep.title')}
-              </Button>
-            )}
             <Button variant="success" onClick={handleDownload} disabled={isDownloading}>
               <Download className="w-4 h-4" />
-              {isDownloading ? t('common.generating') : t('resumeViewer.downloadResume')}
+              {isDownloading ? '正在生成…' : '下载 PDF'}
             </Button>
+            <details className="relative">
+              <summary className="flex h-10 cursor-pointer list-none items-center gap-2 border-2 border-black bg-white px-4 font-mono text-sm font-bold shadow-sw-default hover:bg-blue-50">
+                <MoreHorizontal className="h-4 w-4" />
+                更多
+              </summary>
+              <div className="absolute right-0 z-30 mt-2 w-56 border-2 border-black bg-white p-2 shadow-sw-lg">
+                {isTailoredResume && (
+                  <button type="button" onClick={handleInterviewPrep} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50">
+                    <MessagesSquare className="h-4 w-4" />面试准备
+                  </button>
+                )}
+                {isTailoredResume && parentResumeId && (
+                  <button type="button" onClick={() => router.push(`/compare?base=${encodeURIComponent(parentResumeId)}&tailored=${encodeURIComponent(resumeId)}`)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50">
+                    <Columns2 className="h-4 w-4" />查看 AI 修改记录
+                  </button>
+                )}
+                <button type="button" onClick={() => setShowDeleteDialog(true)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50">
+                  <Trash2 className="h-4 w-4" />删除简历
+                </button>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -511,74 +499,153 @@ export default function ResumeViewerPage() {
           </div>
         )}
 
-        {/* Resume Viewer */}
-        <div className="flex justify-center pb-4">
-          <div className="resume-print w-full max-w-[250mm] shadow-sw-lg border-2 border-black bg-white">
-            <Resume
-              resumeData={localizedResumeData || resumeData}
-              additionalSectionLabels={{
-                technicalSkills: t('resume.additionalLabels.technicalSkills'),
-                languages: t('resume.additionalLabels.languages'),
-                certifications: t('resume.additionalLabels.certifications'),
-                awards: t('resume.additionalLabels.awards'),
-              }}
-              sectionHeadings={{
-                summary: t('resume.sections.summary'),
-                experience: t('resume.sections.experience'),
-                education: t('resume.sections.education'),
-                projects: t('resume.sections.projects'),
-                certifications: t('resume.sections.certifications'),
-                skills: t('resume.sections.skillsOnly'),
-                languages: t('resume.sections.languages'),
-                awards: t('resume.sections.awards'),
-                links: t('resume.sections.links'),
-              }}
-              fallbackLabels={{ name: t('resume.defaults.name') }}
-            />
+        {qualityStatus === 'ready' && qualityReport && (
+          <div className="mb-4 flex flex-wrap items-center gap-2 font-mono text-xs text-steel-grey no-print">
+            <span className="font-bold text-ink">内容检查 {qualityReport.score}/100</span>
+            <span>·</span>
+            <span>{qualityReport.recommendations[0] ?? '未发现明显的夸大或空泛表达。'}</span>
           </div>
+        )}
+
+        {/* JD, resume, and conversational editing stay in one working surface. */}
+        <div
+          className={`grid items-start gap-4 pb-4 ${
+            isTailoredResume
+              ? 'lg:grid-cols-[19rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(32rem,1fr)_21rem]'
+              : ''
+          }`}
+        >
+          {isTailoredResume && (
+            <aside className="no-print overflow-hidden border-2 border-black bg-white shadow-sw-default xl:sticky xl:top-4">
+              <header className="border-b-2 border-black p-4">
+                <p className="font-mono text-xs font-bold text-blue-700">岗位 JD</p>
+                <h3 className="mt-2 font-serif text-xl font-semibold">
+                  {jobContext?.title || '关联岗位'}
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-steel-grey">
+                  {[jobContext?.company, jobContext?.location, jobContext?.source]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+                {jobContext?.original_url && (
+                  <a
+                    href={jobContext.original_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-blue-700 underline"
+                  >
+                    查看原岗位 <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
+              </header>
+              <div className="max-h-[68vh] overflow-y-auto p-4">
+                {jobContext ? (
+                  <p className="whitespace-pre-wrap text-sm leading-7 text-ink-soft">
+                    {jobContext.content}
+                  </p>
+                ) : jobContextError ? (
+                  <p className="text-sm leading-6 text-red-800">岗位 JD 暂时无法读取，请返回岗位列表重试。</p>
+                ) : (
+                  <p className="text-sm text-steel-grey">正在加载岗位 JD…</p>
+                )}
+              </div>
+            </aside>
+          )}
+
+          <div className="resume-print relative w-full overflow-hidden border-2 border-black bg-white shadow-sw-lg">
+            {aiProposal && (
+              <div className="no-print sticky top-0 z-20 flex items-center justify-between border-b-2 border-blue-700 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+                <span className="font-mono font-bold">AI 修改预览 · 尚未保存</span>
+                <span className="text-xs">请在右侧选择“应用修改”或“放弃这次”</span>
+              </div>
+            )}
+            {aiProposal && resumeData && (
+              <AiResumeChangePreview original={resumeData} proposal={aiProposal} />
+            )}
+            {aiProposal ? (
+              <Resume
+                resumeData={aiProposal}
+                additionalSectionLabels={{
+                  technicalSkills: t('resume.additionalLabels.technicalSkills'),
+                  languages: t('resume.additionalLabels.languages'),
+                  certifications: t('resume.additionalLabels.certifications'),
+                  awards: t('resume.additionalLabels.awards'),
+                }}
+                sectionHeadings={{
+                  summary: t('resume.sections.summary'),
+                  experience: t('resume.sections.experience'),
+                  education: t('resume.sections.education'),
+                  projects: t('resume.sections.projects'),
+                  certifications: t('resume.sections.certifications'),
+                  skills: t('resume.sections.skillsOnly'),
+                  languages: t('resume.sections.languages'),
+                  awards: t('resume.sections.awards'),
+                  links: t('resume.sections.links'),
+                }}
+                fallbackLabels={{ name: t('resume.defaults.name') }}
+              />
+            ) : renderProfile.engine === 'rendercv' ? (
+              <iframe
+                key={`${renderProfile.template}-${previewRevision}`}
+                title="专业简历 PDF 预览"
+                src={`${getResumePdfPreviewUrl(resumeId, uiLanguage)}&revision=${previewRevision}`}
+                className="h-[80vh] min-h-[720px] w-full bg-white"
+              />
+            ) : (
+              <Resume
+                resumeData={localizedResumeData || resumeData}
+                additionalSectionLabels={{
+                  technicalSkills: t('resume.additionalLabels.technicalSkills'),
+                  languages: t('resume.additionalLabels.languages'),
+                  certifications: t('resume.additionalLabels.certifications'),
+                  awards: t('resume.additionalLabels.awards'),
+                }}
+                sectionHeadings={{
+                  summary: t('resume.sections.summary'),
+                  experience: t('resume.sections.experience'),
+                  education: t('resume.sections.education'),
+                  projects: t('resume.sections.projects'),
+                  certifications: t('resume.sections.certifications'),
+                  skills: t('resume.sections.skillsOnly'),
+                  languages: t('resume.sections.languages'),
+                  awards: t('resume.sections.awards'),
+                  links: t('resume.sections.links'),
+                }}
+                fallbackLabels={{ name: t('resume.defaults.name') }}
+              />
+            )}
+          </div>
+
+          {isTailoredResume && (
+            <div className="no-print xl:sticky xl:top-4">
+              <AiResumeChat
+                resumeId={resumeId}
+                onProposalChange={setAiProposal}
+                onApplied={(updatedResume) => {
+                  setResumeData(updatedResume);
+                  setPreviewRevision((current) => current + 1);
+                  fetchResumeQuality(resumeId)
+                    .then((report) => {
+                      setQualityReport(report);
+                      setQualityStatus('ready');
+                    })
+                    .catch(() => setQualityStatus('error'));
+                }}
+              />
+            </div>
+          )}
         </div>
 
-        <div className="flex justify-end pt-4 no-print">
-          <Button variant="destructive" onClick={() => setShowDeleteDialog(true)}>
-            {isMasterResume
-              ? t('confirmations.deleteMasterResumeTitle')
-              : t('dashboard.deleteResume')}
-          </Button>
-        </div>
       </div>
 
       {deleteDialogs}
 
       <ConfirmDialog
-        open={downloadError !== null}
-        onOpenChange={(open) => !open && setDownloadError(null)}
-        title={t('resumeViewer.downloadFailedTitle')}
-        description={downloadError ?? ''}
-        confirmLabel={t('common.retry')}
-        cancelLabel={t('common.cancel')}
-        onConfirm={handleDownload}
-        onCancel={() => setDownloadError(null)}
-        variant="danger"
-      />
-
-      <ConfirmDialog
-        open={renameError !== null}
-        onOpenChange={(open) => !open && setRenameError(null)}
-        title={t('resumeViewer.renameFailedTitle')}
-        description={renameError ?? ''}
-        confirmLabel={t('common.retry')}
-        cancelLabel={t('common.cancel')}
-        onConfirm={handleTitleSave}
-        onCancel={() => setRenameError(null)}
-        variant="danger"
-      />
-
-      <ConfirmDialog
         open={showDownloadSuccessDialog}
         onOpenChange={setShowDownloadSuccessDialog}
-        title={t('common.success')}
-        description={t('builder.alerts.downloadSuccess')}
-        confirmLabel={t('common.ok')}
+        title="下载成功"
+        description="PDF 简历已保存到下载目录。"
+        confirmLabel="知道了"
         onConfirm={handleDownloadSuccessConfirm}
         variant="success"
         showCancelButton={false}
@@ -589,7 +656,7 @@ export default function ResumeViewerPage() {
         <EnrichmentModal
           resumeId={resumeId}
           isOpen={showEnrichmentModal}
-          onClose={handleEnrichmentClose}
+          onClose={() => setShowEnrichmentModal(false)}
           onComplete={handleEnrichmentComplete}
         />
       )}

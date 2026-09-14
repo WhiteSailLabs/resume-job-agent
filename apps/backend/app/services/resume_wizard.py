@@ -3,16 +3,14 @@
 import copy
 import json
 import re
-from collections import Counter, deque
 from collections.abc import Callable
-from typing import Any, Protocol
-
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError, field_validator
+from typing import Any
 
 from app.config_cache import get_content_language
 from app.llm import _scrub_secrets, complete_json
 from app.prompts.resume_wizard import RESUME_WIZARD_TURN_PROMPT
 from app.prompts.templates import get_language_name
+from app.services.improver import _sanitize_user_input
 from app.schemas.models import (
     Education,
     Experience,
@@ -26,8 +24,6 @@ from app.schemas.resume_wizard import (
     ResumeWizardQuestion,
     ResumeWizardState,
 )
-from app.services.improver import _sanitize_user_input
-from app.services.resume_wizard_copy import wizard_copy
 
 RESUME_WIZARD_MAX_QUESTIONS = 15
 _PROGRESS_BASELINE = 8
@@ -44,32 +40,31 @@ _VALID_SECTIONS = {
     "review",
 }
 
+_INTRO_QUESTION = (
+    "Hi — I'll help you build your master resume. "
+    "What's your name, and what kind of role are you going for?"
+)
 
-class _IdentifiedEntry(Protocol):
-    """List entry carrying the stable identity shared with the wizard model."""
-
-    id: int
-
-
-class _ResumeWizardAIEnvelope(BaseModel):
-    """Require resume data; omitted or null guidance uses safe defaults."""
-
-    model_config = ConfigDict(strict=True)
-
-    resume_data: dict[str, Any]
-    next_question: dict[str, Any] | None = None
-    inferred_skills: list[str] = Field(default_factory=list)
-    is_complete: StrictBool = False
-
-    @field_validator("inferred_skills", mode="before")
-    @classmethod
-    def _default_null_skills(cls, value: Any) -> Any:
-        return [] if value is None else value
-
-    @field_validator("is_complete", mode="before")
-    @classmethod
-    def _default_null_completion(cls, value: Any) -> Any:
-        return False if value is None else value
+_SECTION_PROMPTS = {
+    "intro": _INTRO_QUESTION,
+    "contact": "What's the best email, phone, or links (LinkedIn / GitHub / site) to include?",
+    "summary": "In a sentence or two, how would you describe yourself professionally?",
+    "workExperience": (
+        "Tell me about one role: title, company, dates, what you did, and any measurable impact."
+    ),
+    "internships": (
+        "Tell me about one internship: title, company, dates, what you worked on, "
+        "and what changed because of it."
+    ),
+    "education": (
+        "Tell me about your education: school, degree, dates, and any honors or standout coursework."
+    ),
+    "personalProjects": (
+        "Tell me about one project: what you built, why it mattered, the tech you used, and any results."
+    ),
+    "skills": "What tools, technologies, or skills do you want on your resume?",
+    "review": "Let's review what's here before we create your master resume.",
+}
 
 # The keyword ("my name", "name") may be lower- or upper-cased, but the captured
 # name must start uppercase — so we case the keyword explicitly with [Mm]/[Nn]
@@ -82,9 +77,9 @@ _INTRO_NAME_PATTERNS = (
 )
 
 
-def section_prompt(section: str, language: str = "en") -> str:
+def section_prompt(section: str) -> str:
     """Deterministic fallback question text for a section."""
-    return wizard_copy(language, section if section in _VALID_SECTIONS else "next")
+    return _SECTION_PROMPTS.get(section, "What would you like to add next?")
 
 
 def valid_section(section: str) -> str:
@@ -94,13 +89,10 @@ def valid_section(section: str) -> str:
 
 def build_initial_wizard_state() -> ResumeWizardState:
     """Build the first state shown to a user entering the wizard."""
-    language = get_content_language()
     return ResumeWizardState(
         step="intro",
         resume_data=ResumeData(),
-        current_question=ResumeWizardQuestion(
-            text=section_prompt("intro", language), section="intro"
-        ),
+        current_question=ResumeWizardQuestion(text=_INTRO_QUESTION, section="intro"),
         progress=ResumeWizardProgress(current=0, total=_PROGRESS_BASELINE),
     )
 
@@ -127,14 +119,14 @@ def merge_unique_skills(existing: list[str], inferred: list[str]) -> list[str]:
     return merged
 
 
-def build_review_warnings(data: ResumeData, language: str = "en") -> list[str]:
+def build_review_warnings(data: ResumeData) -> list[str]:
     """Deterministic, gentle notes about useful resume facts that are missing."""
     warnings: list[str] = []
     info = data.personalInfo
     # Name is the one HARD requirement for finalize (the request 422s without it),
     # so surface it at review rather than letting the user hit a generic failure.
     if not info.name.strip():
-        warnings.append(wizard_copy(language, "warning_name"))
+        warnings.append("Add your name — it's required to create your resume.")
     contact = [
         info.email,
         info.phone,
@@ -143,13 +135,13 @@ def build_review_warnings(data: ResumeData, language: str = "en") -> list[str]:
         info.website or "",
     ]
     if not any(value.strip() for value in contact):
-        warnings.append(wizard_copy(language, "warning_contact"))
+        warnings.append("Add at least one contact method (email, phone, or a link).")
     if not data.workExperience and not data.personalProjects:
-        warnings.append(wizard_copy(language, "warning_experience"))
+        warnings.append("Add at least one experience, internship, or project.")
     if not data.education:
-        warnings.append(wizard_copy(language, "warning_education"))
+        warnings.append("Education is empty — skip only if that's intentional.")
     if not data.additional.technicalSkills:
-        warnings.append(wizard_copy(language, "warning_skills"))
+        warnings.append("Skills are empty — add tools or technologies you've used.")
     return warnings
 
 
@@ -168,6 +160,13 @@ def normalize_wizard_resume_data(data: dict[str, Any]) -> dict[str, Any]:
     return ResumeData.model_validate(normalized).model_dump()
 
 
+def _string_list(value: Any) -> list[str]:
+    """Return string items from a list-like LLM field."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def _next_gap_section(data: ResumeData) -> str:
     """Pick the next obviously-empty section, else review."""
     if not data.workExperience:
@@ -181,71 +180,30 @@ def _next_gap_section(data: ResumeData) -> str:
     return "review"
 
 
-def _merge_entries[T: _IdentifiedEntry](
+def _merge_entries[T](
     existing: list[T],
     updated: list[T],
     key: Callable[[T], tuple[str, ...]],
-    raw_updated: object,
 ) -> list[T]:
-    """Merge echoed entries by stable id, appending entries declared as new.
+    """Union list entries by identity signature.
 
     A partial model reply (e.g. it echoes only the role the user just described
     instead of the full list) must NOT erase earlier entries. So: existing
-    entries the model omits are kept, entries retaining a known positive id are
-    replaced in place, and entries without a known id are appended. The content
-    signature remains only as compatibility for echoes that genuinely omit ids.
-    Raw field presence must survive schema defaults because an explicit ``id: 0``
-    is add intent even when a new entry shares the same content signature.
+    entries the model omits are kept, entries it echoes (same signature) are
+    replaced in place, and genuinely new entries are appended. Signatures are
+    content-based rather than ``id``-based because wizard entry ids default to 0.
     """
     result = list(existing)
-    id_index: dict[int, int] = {}
-    signature_positions: dict[tuple[str, ...], deque[int]] = {}
+    index: dict[tuple[str, ...], int] = {}
     for position, item in enumerate(result):
-        if item.id > 0:
-            id_index.setdefault(item.id, position)
-        signature_positions.setdefault(key(item), deque()).append(position)
-    raw_items = raw_updated if isinstance(raw_updated, list) else []
-    unidentified_full_echo = (
-        len(existing) > 1
-        and len(updated) == len(existing)
-        and all(
-            isinstance(raw_item, dict)
-            and ("id" not in raw_item or raw_item.get("id") == 0)
-            for raw_item in raw_items
-        )
-        and Counter(key(item) for item in updated)
-        == Counter(key(item) for item in existing)
-    )
-    for item_index, item in enumerate(updated):
-        raw_item = raw_items[item_index] if item_index < len(raw_items) else None
-        has_explicit_id = isinstance(raw_item, dict) and "id" in raw_item
-        position = id_index.pop(item.id, None) if item.id > 0 else None
-        if unidentified_full_echo:
-            position = signature_positions[key(item)][0]
-        elif position is None and item.id <= 0 and not has_explicit_id:
-            candidates = signature_positions.get(key(item), deque())
-            if len(candidates) == 1:
-                position = candidates[0]
-        if position is not None:
-            previous_key = key(result[position])
-            candidates = signature_positions.get(previous_key)
-            if candidates is not None:
-                try:
-                    candidates.remove(position)
-                except ValueError:
-                    pass
-                if not candidates:
-                    signature_positions.pop(previous_key)
-            item.id = result[position].id
-            result[position] = item
-            continue
-
-        # A positive id unknown to the current draft is not stable identity.
-        # Treat it as add intent and let the allocator choose a collision-free id.
-        item.id = 0
-        result.append(item)
-        if has_explicit_id:
-            signature_positions.setdefault(key(item), deque()).append(len(result) - 1)
+        index.setdefault(key(item), position)
+    for item in updated:
+        signature = key(item)
+        if signature in index:
+            result[index[signature]] = item
+        else:
+            index[signature] = len(result)
+            result.append(item)
     return result
 
 
@@ -300,30 +258,21 @@ def _merge_section(
     if section in {"workExperience", "internships"}:
         if "workExperience" in raw_updated:
             merged.workExperience = _merge_entries(
-                merged.workExperience,
-                updated.workExperience,
-                _experience_key,
-                raw_updated.get("workExperience"),
+                merged.workExperience, updated.workExperience, _experience_key
             )
         return merged
 
     if section == "education":
         if "education" in raw_updated:
             merged.education = _merge_entries(
-                merged.education,
-                updated.education,
-                _education_key,
-                raw_updated.get("education"),
+                merged.education, updated.education, _education_key
             )
         return merged
 
     if section == "personalProjects":
         if "personalProjects" in raw_updated:
             merged.personalProjects = _merge_entries(
-                merged.personalProjects,
-                updated.personalProjects,
-                _project_key,
-                raw_updated.get("personalProjects"),
+                merged.personalProjects, updated.personalProjects, _project_key
             )
         return merged
 
@@ -358,39 +307,31 @@ def _merge_section(
 
 
 def _assign_entry_ids(data: ResumeData) -> None:
-    """Preserve stable positive ids and allocate ids only for new entries.
+    """Give every list entry a unique 1-based id (in place).
 
-    Downstream consumers use ids for React keys and builder updates. An id echoed
-    from the current draft must therefore survive corrections; omitted, invalid,
-    or duplicate ids receive monotonically increasing replacements.
+    The LLM omits ``id`` (the wizard prompt's schema doesn't request it), so
+    entries default to ``id=0``. Downstream consumers — the live preview's React
+    keys and the builder's ``Math.max(...ids)+1`` add logic — assume unique ids,
+    so renumber them deterministically by position (order is append-stable).
     """
-    for entries in (data.workExperience, data.education, data.personalProjects):
-        next_id = max((item.id for item in entries if item.id > 0), default=0) + 1
-        used: set[int] = set()
-        for item in entries:
-            if item.id > 0 and item.id not in used:
-                used.add(item.id)
-                continue
-            while next_id in used:
-                next_id += 1
-            item.id = next_id
-            used.add(item.id)
-            next_id += 1
+    for index, item in enumerate(data.workExperience, start=1):
+        item.id = index
+    for index, item in enumerate(data.education, start=1):
+        item.id = index
+    for index, item in enumerate(data.personalProjects, start=1):
+        item.id = index
 
 
-def _next_question(
-    candidate: dict[str, Any] | None,
-    data: ResumeData,
-    language: str,
-) -> ResumeWizardQuestion:
+def _next_question(result: dict[str, Any], data: ResumeData) -> ResumeWizardQuestion:
     """Use the model's next_question, or fall back to the next empty section."""
+    candidate = result.get("next_question")
     if isinstance(candidate, dict):
         text = candidate.get("text")
         section = candidate.get("section")
         if isinstance(text, str) and text.strip() and isinstance(section, str):
             return ResumeWizardQuestion(text=text.strip(), section=valid_section(section))
     gap = _next_gap_section(data)
-    return ResumeWizardQuestion(text=section_prompt(gap, language), section=gap)
+    return ResumeWizardQuestion(text=section_prompt(gap), section=gap)
 
 
 async def run_ai_turn(
@@ -401,7 +342,6 @@ async def run_ai_turn(
 ) -> ResumeWizardState:
     """Run one adaptive AI turn (answer or skip) and validate the result."""
     section = state.current_question.section
-    language = get_content_language()
     resume_json = json.dumps(state.resume_data.model_dump(mode="json"), ensure_ascii=False)
     prompt_answer = (
         "(The user skipped this question. Do NOT modify resume_data. "
@@ -412,21 +352,19 @@ async def run_ai_turn(
         else _scrub_secrets(_sanitize_user_input(answer_text))
     )
     prompt = RESUME_WIZARD_TURN_PROMPT.format(
-        output_language=get_language_name(language),
+        output_language=get_language_name(get_content_language()),
         current_section=section,
         resume_json=resume_json,
         answer_text=prompt_answer,
     )
     result = await complete_json(prompt, max_tokens=8192, schema_type="resume")
-    try:
-        envelope = _ResumeWizardAIEnvelope.model_validate(result)
-    except ValidationError as error:
-        raise ValueError("Resume wizard received an invalid response.") from error
+    if not isinstance(result, dict):
+        raise ValueError("Resume wizard LLM response must be a JSON object.")
 
-    raw_resume = envelope.resume_data
-    inferred = envelope.inferred_skills
+    raw_resume = result.get("resume_data")
+    inferred = _string_list(result.get("inferred_skills"))
 
-    if skip:
+    if skip or not isinstance(raw_resume, dict):
         data = state.resume_data.model_copy(deep=True)
     else:
         updated = ResumeData.model_validate(normalize_wizard_resume_data(raw_resume))
@@ -450,7 +388,7 @@ async def run_ai_turn(
     asked_count = state.asked_count + 1
     # `is_complete` is a SUGGESTION to surface "Review & finish" — the step stays
     # "question" and never auto-finalizes. The client decides when to call /review.
-    is_complete = envelope.is_complete or asked_count >= RESUME_WIZARD_MAX_QUESTIONS
+    is_complete = bool(result.get("is_complete")) or asked_count >= RESUME_WIZARD_MAX_QUESTIONS
 
     history = list(state.history)
     history.append(
@@ -465,7 +403,7 @@ async def run_ai_turn(
     return ResumeWizardState(
         step="question",
         resume_data=data,
-        current_question=_next_question(envelope.next_question, data, language),
+        current_question=_next_question(result, data),
         history=history,
         asked_count=asked_count,
         inferred_skills=inferred,
@@ -500,11 +438,10 @@ def apply_back(state: ResumeWizardState) -> ResumeWizardState:
 
 def apply_review(state: ResumeWizardState) -> ResumeWizardState:
     """Move to the review step (no LLM call) and compute gentle warnings."""
-    language = get_content_language()
     next_state = state.model_copy(deep=True)
     next_state.step = "review"
     next_state.current_question = ResumeWizardQuestion(
-        text=section_prompt("review", language), section="review"
+        text=section_prompt("review"), section="review"
     )
-    next_state.warnings = build_review_warnings(next_state.resume_data, language)
+    next_state.warnings = build_review_warnings(next_state.resume_data)
     return next_state

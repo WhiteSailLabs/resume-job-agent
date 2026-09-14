@@ -1,9 +1,9 @@
-# Responsible Disclosure
+# Security policy
 
-## Reporting a Vulnerability
+Please do not open a public issue for a vulnerability, exposed credential, or a report containing resume/JD data.
 
-Resume-Matcher strives to stay ahead of security vulnerabilities but would love to get the community's help in making us aware of the ones we miss.
+Use GitHub's **Report a vulnerability** form in the Security tab of this repository. Include the affected revision, reproduction steps, and a minimal redacted example. Never attach `apps/backend/data`, browser profiles, API keys, cookies, or real resumes.
 
-Please contact a maintainer to report security vulnerabilities and exploits.
+The maintainers will acknowledge a valid report and coordinate disclosure based on severity. Only the latest `main` revision is currently supported.
 
-We will acknowledge legitimate reports and address them according to their severity.
+This local-first preview does not include authentication or multi-user isolation and must not be exposed directly to the public internet.

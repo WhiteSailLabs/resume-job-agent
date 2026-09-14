@@ -54,18 +54,11 @@ export function ApplyingStep() {
 }
 
 interface CompleteStepProps {
-  onClose: () => void | Promise<void>;
+  onClose: () => void;
   updatedCount?: number;
-  refreshFailed?: boolean;
-  isRefreshing?: boolean;
 }
 
-export function CompleteStep({
-  onClose,
-  updatedCount,
-  refreshFailed = false,
-  isRefreshing = false,
-}: CompleteStepProps) {
+export function CompleteStep({ onClose, updatedCount }: CompleteStepProps) {
   const { t } = useTranslations();
   const hasUpdatedCount = updatedCount !== undefined;
   return (
@@ -83,25 +76,9 @@ export function CompleteStep({
             : t('enrichment.complete.updatedFallback')}
         </p>
       </div>
-      {refreshFailed && (
-        <div role="alert" className="max-w-md border-2 border-orange-600 bg-orange-100 p-4">
-          <p className="font-mono text-sm font-bold uppercase text-orange-600">
-            {t('enrichment.complete.refreshFailedTitle')}
-          </p>
-          <p className="mt-1 font-sans text-sm">{t('enrichment.complete.refreshFailed')}</p>
-        </div>
-      )}
-      <Button onClick={onClose} disabled={isRefreshing} className="mt-4 gap-2">
-        {isRefreshing ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : (
-          <Sparkles className="w-4 h-4" />
-        )}
-        {isRefreshing
-          ? t('enrichment.complete.refreshing')
-          : refreshFailed
-            ? t('enrichment.complete.retryRefresh')
-            : t('enrichment.complete.doneButton')}
+      <Button onClick={onClose} className="mt-4 gap-2">
+        <Sparkles className="w-4 h-4" />
+        {t('enrichment.complete.doneButton')}
       </Button>
     </div>
   );

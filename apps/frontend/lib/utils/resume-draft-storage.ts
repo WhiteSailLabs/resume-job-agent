@@ -60,26 +60,17 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return !Array.isArray(value);
 }
 
-export function isResumeDataShape(value: unknown): value is ResumeData {
+function isResumeDataShape(value: unknown): value is ResumeData {
   if (!isObjectRecord(value)) {
     return false;
   }
 
   return (
-    [
-      'personalInfo',
-      'summary',
-      'workExperience',
-      'education',
-      'personalProjects',
-      'additional',
-    ].some((key) => key in value) &&
-    (value.personalInfo === undefined || isObjectRecord(value.personalInfo)) &&
-    (value.summary === undefined || typeof value.summary === 'string') &&
-    (value.workExperience === undefined || Array.isArray(value.workExperience)) &&
-    (value.education === undefined || Array.isArray(value.education)) &&
-    (value.personalProjects === undefined || Array.isArray(value.personalProjects)) &&
-    (value.additional === undefined || isObjectRecord(value.additional))
+    isObjectRecord(value.personalInfo) &&
+    Array.isArray(value.workExperience) &&
+    Array.isArray(value.education) &&
+    Array.isArray(value.personalProjects) &&
+    isObjectRecord(value.additional)
   );
 }
 

@@ -119,8 +119,6 @@ export interface InterviewPrepData {
 
 export interface Data {
   request_id: string;
-  preview_id?: string | null;
-  preview_expires_at?: string | null;
   resume_id: string | null;
   job_id: string;
   resume_preview: ResumePreview;
@@ -140,6 +138,8 @@ export interface Data {
   diff_summary?: ResumeDiffSummary;
   detailed_changes?: ResumeFieldDiff[];
   ats_score?: ATSScore;
+  tailoring_plan?: Record<string, unknown> | null;
+  quality_audit?: Record<string, unknown> | null;
 }
 
 export interface ImprovedResult {

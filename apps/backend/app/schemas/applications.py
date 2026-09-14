@@ -3,8 +3,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
-from pydantic.json_schema import SkipJsonSchema
+from pydantic import BaseModel, Field
 
 
 class ApplicationStatus(str, Enum):
@@ -76,20 +75,12 @@ class ManualApplicationCreate(BaseModel):
 class ApplicationUpdate(BaseModel):
     """Partial update — every field optional."""
 
-    status: ApplicationStatus | SkipJsonSchema[None] = None
+    status: ApplicationStatus | None = None
     position: int | None = None
     notes: str | None = None
     company: str | None = None
     role: str | None = None
     applied_at: str | None = None
-
-    @field_validator("status")
-    @classmethod
-    def reject_null_status(cls, value: ApplicationStatus | None) -> ApplicationStatus:
-        """Omission preserves status; an explicitly supplied null is invalid."""
-        if value is None:
-            raise ValueError("Status cannot be null")
-        return value
 
 
 class BulkStatusUpdate(BaseModel):

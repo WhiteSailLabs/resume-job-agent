@@ -44,4 +44,16 @@ describe('sanitizeHtml', () => {
     expect(out).not.toContain('img');
     expect(out).not.toContain('onerror');
   });
+
+  it('drops unsafe link protocols while retaining link text', () => {
+    const out = sanitizeHtml('<a href="javascript:alert(1)">safe label</a>');
+    expect(out).not.toContain('javascript:');
+    expect(out).toContain('safe label');
+  });
+
+  it('removes the contents of executable tags', () => {
+    const out = sanitizeHtml('<script>alert(1)</script><strong>kept</strong>');
+    expect(out).not.toContain('alert');
+    expect(out).toContain('<strong>kept</strong>');
+  });
 });

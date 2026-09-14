@@ -18,6 +18,7 @@ import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import Plus from 'lucide-react/dist/esm/icons/plus';
 import Settings from 'lucide-react/dist/esm/icons/settings';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
+import BriefcaseBusiness from 'lucide-react/dist/esm/icons/briefcase-business';
 
 import {
   fetchResume,
@@ -28,7 +29,6 @@ import {
   type ResumeListItem,
 } from '@/lib/api/resume';
 import { useStatusCache } from '@/lib/context/status-cache';
-import { hasMeaningfulResumeContent } from '@/lib/utils/resume-content';
 
 type ProcessingStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'loading';
 
@@ -37,13 +37,17 @@ export default function DashboardPage() {
   const [masterResumeId, setMasterResumeId] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>('loading');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [listError, setListError] = useState(false);
-  const [deleteError, setDeleteError] = useState(false);
   const [tailoredResumes, setTailoredResumes] = useState<ResumeListItem[]>([]);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [isMasterChoiceDialogOpen, setIsMasterChoiceDialogOpen] = useState(false);
   const router = useRouter();
+
+  // The former dashboard is retained for the upstream implementation, but is
+  // no longer a user-facing destination in the job-first product flow.
+  useEffect(() => {
+    router.replace('/');
+  }, [router]);
 
   // Status cache for optimistic counter updates and LLM status check
   const {
@@ -56,12 +60,6 @@ export default function DashboardPage() {
 
   // Request id guard for concurrent loadTailoredResumes invocations
   const loadRequestIdRef = useRef(0);
-  const statusRequestIdRef = useRef(0);
-  const retryMasterRef = useRef<string | null>(null);
-  const pollAttemptsRef = useRef(0);
-  const [statusRevision, setStatusRevision] = useState(0);
-  const activeMasterIdRef = useRef<string | null>(null);
-  const mountedRef = useRef(true);
   // Lightweight in-memory cache for job snippets to avoid N+1 refetches
   const jobSnippetCacheRef = useRef<Record<string, string>>({});
 
@@ -85,115 +83,46 @@ export default function DashboardPage() {
     });
   };
 
-  const adoptMasterResume = useCallback((resumeId: string | null) => {
-    if (activeMasterIdRef.current !== resumeId) {
-      statusRequestIdRef.current += 1;
-      retryMasterRef.current = null;
-      pollAttemptsRef.current = 0;
-      setIsRetrying(false);
-    }
-    activeMasterIdRef.current = resumeId;
-    setMasterResumeId(resumeId);
-  }, []);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      loadRequestIdRef.current += 1;
-      statusRequestIdRef.current += 1;
-    };
-  }, []);
-
-  const checkResumeStatus = useCallback(
-    async (resumeId: string, background = false) => {
-      if (
-        !mountedRef.current ||
-        activeMasterIdRef.current !== resumeId ||
-        retryMasterRef.current === resumeId
-      )
+  const checkResumeStatus = useCallback(async (resumeId: string) => {
+    try {
+      setProcessingStatus('loading');
+      const data = await fetchResume(resumeId);
+      const status = data.raw_resume?.processing_status || 'pending';
+      setProcessingStatus(status as ProcessingStatus);
+    } catch (err: unknown) {
+      console.error('Failed to check resume status:', err);
+      // If resume not found (404), clear the stale localStorage
+      if (err instanceof Error && err.message.includes('404')) {
+        localStorage.removeItem('master_resume_id');
+        setMasterResumeId(null);
         return;
-      if (!background) pollAttemptsRef.current = 0;
-      const requestId = ++statusRequestIdRef.current;
-      const isCurrent = () =>
-        mountedRef.current &&
-        requestId === statusRequestIdRef.current &&
-        activeMasterIdRef.current === resumeId;
-      try {
-        if (!background) setProcessingStatus('loading');
-        const data = await fetchResume(resumeId);
-        if (!isCurrent()) return;
-        const savedStatus = data.raw_resume?.processing_status || 'pending';
-        // Older backend versions accepted `{}` as a valid ResumeData object.
-        // Surface that legacy state as failed so users can retry it safely.
-        const status =
-          savedStatus === 'ready' && !hasMeaningfulResumeContent(data.processed_resume)
-            ? 'failed'
-            : savedStatus;
-        setProcessingStatus(status as ProcessingStatus);
-      } catch (err: unknown) {
-        if (!isCurrent()) return;
-        console.error('Failed to check resume status:', err);
-        // If resume not found (404), clear the stale localStorage
-        if (err instanceof Error && err.message.includes('404')) {
-          localStorage.removeItem('master_resume_id');
-          adoptMasterResume(null);
-          return;
-        }
-        setProcessingStatus('failed');
-      } finally {
-        if (isCurrent()) setStatusRevision((version) => version + 1);
       }
-    },
-    [adoptMasterResume]
-  );
+      setProcessingStatus('failed');
+    }
+  }, []);
 
   useEffect(() => {
     const storedId = localStorage.getItem('master_resume_id');
     if (storedId) {
-      adoptMasterResume(storedId);
+      setMasterResumeId(storedId);
       checkResumeStatus(storedId);
     }
-  }, [adoptMasterResume, checkResumeStatus]);
-
-  // A bounded backoff preserves the processing label and never overlaps requests.
-  // Focus or an explicit refresh starts a fresh observation window.
-  useEffect(() => {
-    if (
-      !masterResumeId ||
-      isRetrying ||
-      !['pending', 'processing'].includes(processingStatus) ||
-      pollAttemptsRef.current >= 12
-    )
-      return;
-    const requestId = statusRequestIdRef.current;
-    const delay = Math.min(30_000, 3_000 * 2 ** pollAttemptsRef.current);
-    const timer = window.setTimeout(() => {
-      if (requestId !== statusRequestIdRef.current || document.hidden) return;
-      pollAttemptsRef.current += 1;
-      void checkResumeStatus(masterResumeId, true);
-    }, delay);
-    return () => window.clearTimeout(timer);
-  }, [masterResumeId, processingStatus, isRetrying, statusRevision, checkResumeStatus]);
+  }, [checkResumeStatus]);
 
   const loadTailoredResumes = useCallback(async () => {
-    const requestId = ++loadRequestIdRef.current;
-    const isCurrent = () => mountedRef.current && requestId === loadRequestIdRef.current;
     try {
-      setListError(false);
       const data = await fetchResumeList(true);
-      if (!isCurrent()) return;
       const masterFromList = data.find((r) => r.is_master);
       const storedId = localStorage.getItem('master_resume_id');
       const resolvedMasterId = masterFromList?.resume_id || storedId;
 
       if (resolvedMasterId) {
         localStorage.setItem('master_resume_id', resolvedMasterId);
-        adoptMasterResume(resolvedMasterId);
+        setMasterResumeId(resolvedMasterId);
         checkResumeStatus(resolvedMasterId);
       } else {
         localStorage.removeItem('master_resume_id');
-        adoptMasterResume(null);
+        setMasterResumeId(null);
       }
 
       const filtered = data.filter((r) => r.resume_id !== resolvedMasterId);
@@ -203,6 +132,9 @@ export default function DashboardPage() {
       // (identified by having a non-null parent_id). This avoids N+1 calls
       // for untailored resumes.
       const tailoredWithParent = filtered.filter((r) => r.parent_id);
+
+      // Guard against concurrent invocations overwriting each other
+      const requestId = ++loadRequestIdRef.current;
 
       // Fetch job description snippets for tailored resumes in parallel and attach to state
       // Use a small in-memory cache to avoid re-fetching the same snippet repeatedly.
@@ -217,28 +149,26 @@ export default function DashboardPage() {
           try {
             const jd = await fetchJobDescription(r.resume_id);
             const snippet = (jd?.content || '').slice(0, 80);
-            if (isCurrent()) jobSnippetCacheRef.current[r.resume_id] = snippet;
+            jobSnippetCacheRef.current[r.resume_id] = snippet;
             jobSnippets[r.resume_id] = snippet;
           } catch {
             // ignore missing job descriptions and cache empty result
-            if (isCurrent()) jobSnippetCacheRef.current[r.resume_id] = '';
+            jobSnippetCacheRef.current[r.resume_id] = '';
             jobSnippets[r.resume_id] = '';
           }
         })
       );
 
       // Only apply results if this invocation is the latest (prevents stale overwrite)
-      if (isCurrent()) {
+      if (requestId === loadRequestIdRef.current) {
         setTailoredResumes((prev) =>
           prev.map((r) => ({ ...r, jobSnippet: jobSnippets[r.resume_id] || '' }))
         );
       }
     } catch (err) {
-      if (!isCurrent()) return;
       console.error('Failed to load tailored resumes:', err);
-      setListError(true);
     }
-  }, [adoptMasterResume, checkResumeStatus]);
+  }, [checkResumeStatus]);
 
   useEffect(() => {
     loadTailoredResumes();
@@ -254,10 +184,8 @@ export default function DashboardPage() {
   }, [loadTailoredResumes, checkResumeStatus]);
 
   const handleUploadComplete = (resumeId: string) => {
-    loadRequestIdRef.current += 1;
-    void loadTailoredResumes();
     localStorage.setItem('master_resume_id', resumeId);
-    adoptMasterResume(resumeId);
+    setMasterResumeId(resumeId);
     // Check status after upload completes
     checkResumeStatus(resumeId);
     // Update cached counters
@@ -284,45 +212,25 @@ export default function DashboardPage() {
 
   const handleRetryProcessing = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!masterResumeId || retryMasterRef.current === masterResumeId) return;
-    const resumeId = masterResumeId;
-    retryMasterRef.current = resumeId;
-    const requestId = ++statusRequestIdRef.current;
-    const isCurrent = () =>
-      mountedRef.current &&
-      requestId === statusRequestIdRef.current &&
-      activeMasterIdRef.current === resumeId;
+    if (!masterResumeId) return;
     setIsRetrying(true);
-    setProcessingStatus('loading');
     try {
-      const result = await retryProcessing(resumeId);
-      if (!isCurrent()) return;
+      const result = await retryProcessing(masterResumeId);
       if (result.processing_status === 'ready') {
         setProcessingStatus('ready');
       } else if (
         result.processing_status === 'processing' ||
         result.processing_status === 'pending'
       ) {
-        pollAttemptsRef.current = 0;
         setProcessingStatus(result.processing_status);
       } else {
         setProcessingStatus('failed');
       }
     } catch (err) {
-      if (!isCurrent()) return;
       console.error('Retry processing failed:', err);
-      if (err instanceof Error && err.message.includes('status 404')) {
-        localStorage.removeItem('master_resume_id');
-        adoptMasterResume(null);
-        setHasMasterResume(false);
-        return;
-      }
       setProcessingStatus('failed');
     } finally {
-      if (isCurrent()) {
-        retryMasterRef.current = null;
-        setIsRetrying(false);
-      }
+      setIsRetrying(false);
     }
   };
 
@@ -333,24 +241,17 @@ export default function DashboardPage() {
 
   const confirmDeleteAndReupload = async () => {
     if (!masterResumeId) return;
-    const resumeId = masterResumeId;
-    loadRequestIdRef.current += 1;
     try {
-      setDeleteError(false);
-      await deleteResume(resumeId);
-      if (!mountedRef.current || activeMasterIdRef.current !== resumeId) return;
+      await deleteResume(masterResumeId);
       decrementResumes();
       setHasMasterResume(false);
       localStorage.removeItem('master_resume_id');
-      adoptMasterResume(null);
+      setMasterResumeId(null);
       setProcessingStatus('loading');
       setIsUploadDialogOpen(true);
       await loadTailoredResumes();
     } catch (err) {
-      if (!mountedRef.current || activeMasterIdRef.current !== resumeId) return;
       console.error('Failed to delete resume:', err);
-      setShowDeleteDialog(false);
-      setDeleteError(true);
     }
   };
 
@@ -417,30 +318,8 @@ export default function DashboardPage() {
   // Using the hex values from before to maintain exact look, or we could map them to variants
   const fillerPalette = ['bg-secondary', 'bg-[#D8D8D2]', 'bg-[#CFCFC7]', 'bg-[#E0E0D8]'];
 
-  const listErrorAlert = listError ? (
-    <div
-      role="alert"
-      className="m-6 rounded-none border-2 border-red-600 bg-red-100 p-6 shadow-sw-default"
-    >
-      <div className="flex items-start gap-3">
-        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
-        <div>
-          <p className="font-mono text-sm font-bold uppercase text-red-600">
-            {t('dashboard.errors.loadFailed')}
-          </p>
-          <Button className="mt-4" variant="outline" onClick={loadTailoredResumes}>
-            <RefreshCw className="h-4 w-4" />
-            {t('common.retry')}
-          </Button>
-        </div>
-      </div>
-    </div>
-  ) : null;
-  if (listError && !masterResumeId && tailoredResumes.length === 0) return listErrorAlert;
-
   return (
     <div className="space-y-6">
-      {listErrorAlert}
       {/* Configuration Warning Banner */}
       {masterResumeId && !isLlmConfigured && !statusLoading && (
         <div className="border-2 border-warning bg-amber-50 p-4 shadow-sw-default mb-6 flex items-center justify-between">
@@ -651,6 +530,26 @@ export default function DashboardPage() {
         })}
 
         {/* 3. Create Tailored Resume */}
+        <Link href="/jobs" className="block h-full">
+          <Card
+            variant="interactive"
+            className="aspect-square h-full bg-blue-700 text-white hover:bg-blue-800"
+          >
+            <div className="flex flex-1 flex-col justify-between">
+              <div className="flex h-14 w-14 items-center justify-center border-2 border-current">
+                <BriefcaseBusiness className="h-7 w-7" />
+              </div>
+              <div>
+                <CardTitle className="text-xl uppercase">岗位发现</CardTitle>
+                <CardDescription className="mt-2 text-current opacity-80">
+                  {'// '}一句话搜索、审核岗位，再生成专属简历
+                </CardDescription>
+              </div>
+            </div>
+          </Card>
+        </Link>
+
+        {/* 4. Create Tailored Resume */}
         <Card className="aspect-square h-full" variant="default">
           <div className="flex-1 flex flex-col items-center justify-center text-center h-full">
             <Button
@@ -666,7 +565,7 @@ export default function DashboardPage() {
           </div>
         </Card>
 
-        {/* 4. Fillers */}
+        {/* 5. Fillers */}
         {Array.from({ length: fillerCount }).map((_, index) => (
           <Card
             key={`filler-${index}`}
@@ -693,18 +592,6 @@ export default function DashboardPage() {
           confirmLabel={t('dashboard.deleteAndReupload')}
           cancelLabel={t('confirmations.keepResumeCancelLabel')}
           onConfirm={confirmDeleteAndReupload}
-          variant="danger"
-        />
-
-        <ConfirmDialog
-          open={deleteError}
-          onOpenChange={setDeleteError}
-          title={t('common.error')}
-          description={t('dashboard.errors.deleteFailed')}
-          confirmLabel={t('common.retry')}
-          cancelLabel={t('common.cancel')}
-          onConfirm={confirmDeleteAndReupload}
-          onCancel={() => setDeleteError(false)}
           variant="danger"
         />
       </SwissGrid>

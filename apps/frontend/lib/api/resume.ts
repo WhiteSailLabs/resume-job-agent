@@ -5,7 +5,6 @@ import type {
 import type { ResumeData } from '@/components/dashboard/resume-component';
 import { type TemplateSettings } from '@/lib/types/template-settings';
 import { type Locale } from '@/i18n/config';
-import { clearResumeWizardCompletion } from '@/lib/utils/resume-wizard-storage';
 import { API_BASE, DEFAULT_TIMEOUT_MS, apiPost, apiPatch, apiDelete, apiFetch } from './client';
 
 // Matches backend schemas/models.py ResumeData
@@ -55,6 +54,42 @@ interface ProcessedResume {
   };
 }
 
+export type ResumeRenderTemplate =
+  | 'swiss-single'
+  | 'swiss-two-column'
+  | 'modern'
+  | 'modern-two-column'
+  | 'latex'
+  | 'clean'
+  | 'vivid'
+  | 'rendercv-engineering'
+  | 'rendercv-classic'
+  | 'rendercv-modern'
+  | 'rendercv-asu';
+
+export interface ResumeRenderProfile {
+  engine: 'react' | 'rendercv';
+  template: ResumeRenderTemplate;
+}
+
+export interface ResumeQualityReport {
+  score: number;
+  status: 'ready' | 'review';
+  checks: {
+    unsupported_metrics: string[];
+    unsupported_strong_claims: string[];
+    vague_bullets: string[];
+    action_bullet_ratio: number;
+    evidence_bullet_ratio: number;
+    keyword_coverage: number | null;
+    matched_keywords: string[];
+    substantive_entry_count: number;
+    skill_count: number;
+  };
+  recommendations: string[];
+  source: string;
+}
+
 interface ResumeResponse {
   request_id: string;
   data: {
@@ -72,6 +107,7 @@ interface ResumeResponse {
     interview_prep?: InterviewPrepData | null;
     parent_id?: string | null; // For determining if resume is tailored
     title?: string | null;
+    render_profile: ResumeRenderProfile;
   };
 }
 
@@ -81,18 +117,20 @@ export interface ResumeUploadResponse {
   request_id: string;
   resume_id: string;
   processing_status: 'pending' | 'processing' | 'ready' | 'failed';
+  processing_error?: 'llm_not_configured' | 'model_not_enabled' | 'model_rate_limited' | 'parse_failed' | null;
   is_master: boolean;
 }
 
 interface ImproveResumeConfirmRequest {
   resume_id: string;
   job_id: string;
-  preview_id?: string | null;
   improved_data: ResumeData;
   improvements: Array<{
     suggestion: string;
     lineNumber?: number | null;
   }>;
+  tailoring_plan?: Record<string, unknown> | null;
+  quality_audit?: Record<string, unknown> | null;
 }
 
 function normalizeResumeId(resumeId: string): string {
@@ -112,6 +150,10 @@ export interface ResumeListItem {
   created_at: string;
   updated_at: string;
   title?: string | null;
+  render_profile: ResumeRenderProfile;
+  job_id?: string | null;
+  company?: string | null;
+  job_title?: string | null;
   // Optional lightweight snippet of associated job description (populated client-side)
   jobSnippet?: string;
 }
@@ -212,6 +254,13 @@ export async function fetchResumeList(includeMaster = false): Promise<ResumeList
   return payload.data;
 }
 
+export async function setMasterResume(resumeId: string): Promise<void> {
+  const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/set-master`, {});
+  if (!res.ok) {
+    throw new Error(`设置主简历失败（${res.status}）。`);
+  }
+}
+
 export async function updateResume(
   resumeId: string,
   resumeData: ProcessedResume
@@ -251,7 +300,6 @@ export function getResumePdfUrl(
     params.set('showContactIcons', String(settings.showContactIcons));
     params.set('accentColor', settings.accentColor);
   } else {
-    params.set('template', 'swiss-single');
     params.set('pageSize', 'A4');
   }
   if (locale) {
@@ -259,6 +307,41 @@ export function getResumePdfUrl(
   }
 
   return `${API_BASE}/resumes/${encodeURIComponent(normalizedId)}/pdf?${params.toString()}`;
+}
+
+export function getResumePdfPreviewUrl(resumeId: string, locale?: Locale): string {
+  const url = getResumePdfUrl(resumeId, undefined, locale);
+  return `${url}${url.includes('?') ? '&' : '?'}inline=true`;
+}
+
+export async function updateResumeRenderProfile(
+  resumeId: string,
+  profile: ResumeRenderProfile
+): Promise<ResumeRenderProfile> {
+  const res = await apiPatch(`/resumes/${encodeURIComponent(resumeId)}/render-profile`, profile);
+  if (!res.ok) throw new Error(`Failed to update template (status ${res.status}).`);
+  const payload = (await res.json()) as { render_profile: ResumeRenderProfile };
+  return payload.render_profile;
+}
+
+/** Save a second, presentation-only version of a tailored resume. */
+export async function createResumeVisualVersion(
+  resumeId: string,
+  profile: ResumeRenderProfile
+): Promise<{ resume_id: string; render_profile: ResumeRenderProfile; job_id: string }> {
+  const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/visual-versions`, profile);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to create visual version (status ${res.status}): ${text}`);
+  }
+  return (await res.json()) as { resume_id: string; render_profile: ResumeRenderProfile; job_id: string };
+}
+
+export async function fetchResumeQuality(resumeId: string): Promise<ResumeQualityReport> {
+  const res = await apiFetch(`/resumes/${encodeURIComponent(resumeId)}/quality`);
+  if (!res.ok) throw new Error(`Failed to load quality report (status ${res.status}).`);
+  const payload = (await res.json()) as { data: ResumeQualityReport };
+  return payload.data;
 }
 
 export async function downloadResumePdf(
@@ -282,7 +365,6 @@ export async function deleteResume(resumeId: string): Promise<void> {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to delete resume (status ${res.status}): ${text}`);
   }
-  clearResumeWizardCompletion(resumeId);
 }
 
 /** Updates the cover letter for a resume */
@@ -376,15 +458,8 @@ export async function generateInterviewPrep(resumeId: string): Promise<Interview
 }
 
 /** Retries AI processing for a failed resume */
-export async function retryProcessing(
-  resumeId: string
-): Promise<Pick<ResumeUploadResponse, 'resume_id' | 'processing_status'>> {
+export async function retryProcessing(resumeId: string): Promise<ResumeUploadResponse> {
   const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/retry-processing`, {});
-  if (res.status === 409) {
-    // Another attempt owns the row. Observe it instead of labeling it failed.
-    const current = await fetchResume(resumeId);
-    return { resume_id: resumeId, processing_status: current.raw_resume.processing_status };
-  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to retry processing (status ${res.status}): ${text}`);
@@ -395,11 +470,33 @@ export async function retryProcessing(
 /** Fetches the job description used to tailor a resume */
 export async function fetchJobDescription(
   resumeId: string
-): Promise<{ job_id: string; content: string }> {
+): Promise<{
+  job_id: string;
+  content: string;
+  title: string;
+  company: string;
+  location: string;
+  source: string;
+  original_url?: string | null;
+}> {
   const res = await apiFetch(`/resumes/${encodeURIComponent(resumeId)}/job-description`);
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to fetch job description (status ${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+export async function previewAiResumeAdjustment(
+  resumeId: string,
+  instruction: string
+): Promise<{ reply: string; changed_paths: string[]; proposed_resume: ResumeData }> {
+  const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/ai-adjust/preview`, {
+    instruction,
+  }, DEFAULT_TIMEOUT_MS);
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.detail || `AI 调整失败（${res.status}）`);
   }
   return res.json();
 }

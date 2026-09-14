@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.database import Database
 from app.main import app
 from app.schemas.applications import APPLICATION_STATUS_ORDER
 
@@ -211,13 +210,11 @@ class TestRobustnessFixes:
         assert "bogus_status" not in columns
         assert len(columns["applied"]) == 1  # the valid card still renders
 
-    async def test_manual_add_cleans_up_orphan_job_on_failure(
-        self, isolated_db: Database
-    ) -> None:
+    async def test_manual_add_cleans_up_orphan_job_on_failure(self, isolated_db):
         """If application creation fails, the just-created job is removed."""
         with patch.object(
             isolated_db,
-            "_insert_application",
+            "create_application",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):

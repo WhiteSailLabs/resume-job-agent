@@ -42,6 +42,21 @@ class TestResumeCrud:
         assert updated["title"] == "New Title"
         assert updated["updated_at"] >= created["updated_at"]
 
+    async def test_render_profile_switch_does_not_change_content(self, db):
+        created = await db.create_resume(
+            content="source",
+            render_profile={"engine": "rendercv", "template": "rendercv-asu"},
+        )
+        updated = await db.update_resume(
+            created["resume_id"],
+            {"render_profile": {"engine": "rendercv", "template": "rendercv-classic"}},
+        )
+        assert updated["content"] == "source"
+        assert updated["render_profile"] == {
+            "engine": "rendercv",
+            "template": "rendercv-classic",
+        }
+
     async def test_update_missing_raises(self, db):
         with pytest.raises(ValueError):
             await db.update_resume("missing", {"title": "X"})

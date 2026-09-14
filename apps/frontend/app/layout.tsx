@@ -49,10 +49,10 @@ const notoSansJP = Noto_Sans_JP({
 });
 
 export const metadata: Metadata = {
-  title: 'Resume Matcher',
-  description: 'Build your resume with Resume Matcher',
-  applicationName: 'Resume Matcher',
-  keywords: ['resume', 'matcher', 'job', 'application'],
+  title: 'Resume Job Agent',
+  description: 'Discover jobs and tailor evidence-grounded resumes locally',
+  applicationName: 'Resume Job Agent',
+  keywords: ['resume', 'job discovery', 'AI agent', 'job application'],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

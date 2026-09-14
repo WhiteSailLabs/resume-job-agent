@@ -1,8 +1,8 @@
 services:
   resume-matcher:
-    image: ghcr.io/srbhr/resume-matcher
+    image: ghcr.io/whitesaillabs/resume-job-agent:latest
     build: .
-    container_name: resume-matcher
+    container_name: resume-job-agent
     ports:
       - "${PORT:-3000}:3000"
     volumes:

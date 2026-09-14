@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Resume Job Agent Browser Bridge",
+  "version": "0.3.1",
+  "description": "Use a visible, signed-in BOSS tab to collect job cards for Resume Job Agent.",
+  "permissions": ["activeTab", "storage", "tabs", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://*.zhipin.com/*",
+    "https://*.liepin.com/*",
+    "https://*.zhaopin.com/*",
+    "https://*.51job.com/*"
+  ],
+  "background": {"service_worker": "service-worker.js"},
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+J",
+        "mac": "Alt+Shift+J"
+      },
+      "description": "导入当前 BOSS 职位到 Resume Job Agent"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["app-bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {"default_title": "导入当前 BOSS 职位到 Resume Job Agent（Option+Shift+J）"}
+}

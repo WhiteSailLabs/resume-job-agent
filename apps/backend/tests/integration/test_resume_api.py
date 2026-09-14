@@ -1,7 +1,5 @@
 """Integration tests for resume CRUD endpoints."""
 
-from typing import Any
-
 import json
 from unittest.mock import patch, AsyncMock, MagicMock
 from uuid import uuid4
@@ -9,9 +7,8 @@ from uuid import uuid4
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.database import ResumeNotFoundError
 from app.main import app
-from app.schemas import InterviewPrepData
+from app.schemas import ImproveDiffResult, InterviewPrepData, ResumeChange
 
 
 SAMPLE_INTERVIEW_PREP = {
@@ -171,6 +168,207 @@ class TestUpdateTitle:
         assert resp.status_code == 404
 
 
+class TestTailoredResumeWorkspace:
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_job_description_returns_workspace_metadata(
+        self, mock_db, client, mock_resume_record
+    ):
+        mock_db.get_resume.return_value = {
+            **mock_resume_record,
+            "is_master": False,
+            "parent_id": "master-1",
+        }
+        mock_db.get_improvement_by_tailored_resume.return_value = {"job_id": "job-1"}
+        mock_db.get_job.return_value = {
+            "job_id": "job-1",
+            "content": "完整岗位描述",
+            "title": "AI 产品经理",
+            "company": "示例科技",
+            "location": "上海",
+            "source": "BOSS直聘",
+            "original_url": "https://example.com/job/1",
+        }
+
+        async with client:
+            resp = await client.get("/api/v1/resumes/res-123/job-description")
+
+        assert resp.status_code == 200
+        assert resp.json()["company"] == "示例科技"
+        assert resp.json()["title"] == "AI 产品经理"
+
+    @patch("app.routers.resumes.get_llm_config")
+    @patch("app.routers.resumes.extract_job_keywords", new_callable=AsyncMock)
+    @patch("app.routers.resumes.generate_resume_diffs", new_callable=AsyncMock)
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_ai_adjustment_previews_without_saving(
+        self,
+        mock_db,
+        mock_generate_diffs,
+        mock_extract_keywords,
+        mock_get_llm,
+        client,
+        mock_resume_record,
+    ):
+        tailored = {
+            **mock_resume_record,
+            "is_master": False,
+            "parent_id": "master-1",
+            "content": json.dumps(mock_resume_record["processed_data"]),
+        }
+        original_summary = tailored["processed_data"]["summary"]
+        mock_db.get_resume.return_value = tailored
+        mock_db.get_improvement_by_tailored_resume.return_value = {"job_id": "job-1"}
+        mock_db.get_job.return_value = {
+            "job_id": "job-1",
+            "content": "需要模型评测平台经验，并能推动跨团队交付。",
+        }
+        mock_extract_keywords.return_value = {"keywords": ["模型评测"]}
+        mock_generate_diffs.return_value = ImproveDiffResult(
+            changes=[
+                ResumeChange(
+                    path="summary",
+                    action="replace",
+                    original=original_summary,
+                    value=f"{original_summary} 聚焦模型评测平台交付。",
+                    reason="突出岗位相关证据",
+                )
+            ],
+            strategy_notes="突出模型评测",
+        )
+        mock_get_llm.return_value = MagicMock(provider="openai_compatible", model="mock")
+
+        async with client:
+            resp = await client.post(
+                "/api/v1/resumes/res-123/ai-adjust/preview",
+                json={"instruction": "突出模型评测经验"},
+            )
+
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["changed_paths"] == ["summary"]
+        assert "模型评测平台交付" in payload["proposed_resume"]["summary"]
+        mock_db.update_resume.assert_not_awaited()
+
+
+class TestResumeRenderProfile:
+    """Template changes are persisted independently from resume content."""
+
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_fetch_old_resume_uses_professional_default(
+        self, mock_db, client, mock_resume_record
+    ):
+        mock_db.get_resume.return_value = {**mock_resume_record, "render_profile": None}
+
+        async with client:
+            resp = await client.get("/api/v1/resumes", params={"resume_id": "res-123"})
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["render_profile"] == {
+            "engine": "rendercv",
+            "template": "rendercv-engineering",
+        }
+
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_switch_profile_only_updates_render_profile(
+        self, mock_db, client, mock_resume_record
+    ):
+        mock_db.get_resume.return_value = mock_resume_record
+        mock_db.update_resume.return_value = {
+            **mock_resume_record,
+            "render_profile": {"engine": "rendercv", "template": "rendercv-asu"},
+        }
+
+        async with client:
+            resp = await client.patch(
+                "/api/v1/resumes/res-123/render-profile",
+                json={"engine": "rendercv", "template": "rendercv-asu"},
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["render_profile"]["template"] == "rendercv-asu"
+        mock_db.update_resume.assert_awaited_once_with(
+            "res-123",
+            {"render_profile": {"engine": "rendercv", "template": "rendercv-asu"}},
+        )
+
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_tailored_style_creates_a_visual_version_with_same_job_lineage(
+        self, mock_db, client, mock_resume_record
+    ):
+        source = {
+            **mock_resume_record,
+            "is_master": False,
+            "parent_id": "master-1",
+            "title": "腾讯｜AI 产品经理｜2026-09-07",
+            "render_profile": {"engine": "rendercv", "template": "rendercv-engineering"},
+        }
+        mock_db.get_resume.return_value = source
+        mock_db.get_improvement_by_tailored_resume.return_value = {
+            "original_resume_id": "master-1",
+            "job_id": "job-1",
+            "improvements": [{"suggestion": "Preserve evidence"}],
+        }
+        mock_db.create_resume.return_value = {"resume_id": "visual-2"}
+
+        async with client:
+            resp = await client.post(
+                "/api/v1/resumes/res-123/visual-versions",
+                json={"engine": "rendercv", "template": "rendercv-modern"},
+            )
+
+        assert resp.status_code == 201
+        assert resp.json()["resume_id"] == "visual-2"
+        assert resp.json()["job_id"] == "job-1"
+        assert mock_db.create_improvement.await_args.kwargs["job_id"] == "job-1"
+        assert mock_db.create_improvement.await_args.kwargs["original_resume_id"] == "master-1"
+
+    @patch("app.routers.resumes.render_resume_with_rendercv", return_value=b"%PDF-test")
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_pdf_uses_stored_profile_and_supports_inline_preview(
+        self, mock_db, mock_render, client, mock_resume_record
+    ):
+        mock_db.get_resume.return_value = {
+            **mock_resume_record,
+            "render_profile": {"engine": "rendercv", "template": "rendercv-asu"},
+        }
+
+        async with client:
+            resp = await client.get("/api/v1/resumes/res-123/pdf", params={"inline": True})
+
+        assert resp.status_code == 200
+        assert resp.content == b"%PDF-test"
+        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.headers["content-disposition"].startswith("inline;")
+        mock_render.assert_called_once_with(mock_resume_record["processed_data"], "rendercv-asu")
+
+    @patch("app.routers.resumes.db", new_callable=AsyncMock)
+    async def test_quality_compares_tailored_resume_to_original(
+        self, mock_db, client, mock_resume_record
+    ):
+        tailored = {
+            **mock_resume_record,
+            "processed_data": {
+                **mock_resume_record["processed_data"],
+                "summary": "主导增长项目，提升 37%",
+            },
+        }
+        mock_db.get_resume.side_effect = [tailored, mock_resume_record]
+        mock_db.get_improvement_by_tailored_resume.return_value = {
+            "original_resume_id": "master-1",
+            "job_id": "job-1",
+        }
+        mock_db.get_job.return_value = {"job_keywords": {"keywords": ["Python"]}}
+
+        async with client:
+            resp = await client.get("/api/v1/resumes/res-123/quality")
+
+        assert resp.status_code == 200
+        report = resp.json()["data"]
+        assert "37%" in report["checks"]["unsupported_metrics"]
+        assert "主导" in report["checks"]["unsupported_strong_claims"]
+        assert report["status"] == "review"
+
+
 class TestUpdateCoverLetter:
     """PATCH /api/v1/resumes/{resume_id}/cover-letter"""
 
@@ -293,19 +491,11 @@ class TestRetryProcessing:
 
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_successful(
-        self,
-        mock_db: AsyncMock,
-        mock_parse: AsyncMock,
-        client: AsyncClient,
-        mock_resume_record: dict[str, Any],
-        sample_resume: dict[str, Any],
-    ) -> None:
+    async def test_retry_successful(self, mock_db, mock_parse, client, mock_resume_record, sample_resume):
         failed_record = {**mock_resume_record, "processing_status": "failed"}
         mock_db.get_resume.return_value = failed_record
-        mock_db.claim_resume_processing.return_value = "token-1"
-        mock_db.finish_resume_processing.return_value = "committed"
         mock_parse.return_value = sample_resume
+        mock_db.update_resume.return_value = {**failed_record, "processing_status": "ready", "processed_data": sample_resume}
         async with client:
             resp = await client.post("/api/v1/resumes/res-123/retry-processing")
         assert resp.status_code == 200
@@ -313,9 +503,7 @@ class TestRetryProcessing:
         assert data["processing_status"] == "ready"
 
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_not_failed_returns_400(
-        self, mock_db: AsyncMock, client: AsyncClient, mock_resume_record: dict[str, Any]
-    ) -> None:
+    async def test_retry_not_failed_returns_400(self, mock_db, client, mock_resume_record):
         # processing_status is "ready", not "failed"
         mock_db.get_resume.return_value = mock_resume_record
         async with client:
@@ -324,154 +512,32 @@ class TestRetryProcessing:
 
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_empty_legacy_ready_resume(
-        self,
-        mock_db: AsyncMock,
-        mock_parse: AsyncMock,
-        client: AsyncClient,
-        mock_resume_record: dict[str, Any],
-        sample_resume: dict[str, Any],
-    ) -> None:
-        empty_ready_record = {
-            **mock_resume_record,
-            "processing_status": "ready",
-            "processed_data": {},
-        }
-        mock_db.get_resume.return_value = empty_ready_record
-        mock_db.claim_resume_processing.return_value = "token-1"
-        mock_db.finish_resume_processing.return_value = "committed"
-        mock_parse.return_value = sample_resume
+    async def test_retry_reports_missing_model_credentials_actionably(
+        self, mock_db, mock_parse, client, mock_resume_record
+    ):
+        mock_db.get_resume.return_value = {**mock_resume_record, "processing_status": "failed"}
+        mock_parse.side_effect = RuntimeError("OpenAIException - Missing credentials")
+
         async with client:
-            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
-        assert resp.status_code == 200
-        mock_parse.assert_awaited_once_with(empty_ready_record["content"])
+            response = await client.post("/api/v1/resumes/res-123/retry-processing")
+
+        assert response.status_code == 200
+        assert response.json()["processing_status"] == "failed"
+        assert response.json()["processing_error"] == "llm_not_configured"
 
     @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
     @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_legacy_ready_resume_with_schema_defaults(
-        self,
-        mock_db: AsyncMock,
-        mock_parse: AsyncMock,
-        client: AsyncClient,
-        mock_resume_record: dict[str, Any],
-        sample_resume: dict[str, Any],
-    ) -> None:
-        legacy_default_record = {
-            **mock_resume_record,
-            "processing_status": "ready",
-            "processed_data": {
-                "workExperience": [
-                    {
-                        "id": 0,
-                        "title": "",
-                        "company": "",
-                        "description": [],
-                        "descriptionStyles": [],
-                    }
-                ],
-                "customSections": {
-                    "empty": {
-                        "sectionType": "itemList",
-                        "items": [{"id": 0, "title": "", "description": []}],
-                    }
-                },
-            },
-        }
-        mock_db.get_resume.return_value = legacy_default_record
-        mock_db.claim_resume_processing.return_value = "token-1"
-        mock_db.finish_resume_processing.return_value = "committed"
-        mock_parse.return_value = sample_resume
+    async def test_retry_reports_model_activation_requirement_actionably(
+        self, mock_db, mock_parse, client, mock_resume_record
+    ):
+        mock_db.get_resume.return_value = {**mock_resume_record, "processing_status": "failed"}
+        mock_parse.side_effect = RuntimeError("Your account has not activated the model service")
 
         async with client:
-            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
+            response = await client.post("/api/v1/resumes/res-123/retry-processing")
 
-        assert resp.status_code == 200
-        assert resp.json()["processing_status"] == "ready"
-        mock_parse.assert_awaited_once_with(legacy_default_record["content"])
-        mock_db.finish_resume_processing.assert_awaited_once_with(
-            "res-123",
-            "token-1",
-            processing_status="ready",
-            processed_data=sample_resume,
-        )
-
-    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
-    @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_returns_404_when_resume_deleted_mid_retry(
-        self,
-        mock_db: AsyncMock,
-        mock_parse: AsyncMock,
-        client: AsyncClient,
-        mock_resume_record: dict[str, Any],
-    ) -> None:
-        """A compare-and-set miss for a deleted retry target yields 404."""
-        mock_db.get_resume.return_value = {
-            **mock_resume_record,
-            "processing_status": "failed",
-        }
-        mock_db.claim_resume_processing.return_value = "token-1"
-        mock_parse.side_effect = RuntimeError("llm exploded")
-        mock_db.finish_resume_processing.return_value = "missing"
-
-        async with client:
-            resp = await client.post("/api/v1/resumes/res-123/retry-processing")
-
-        assert resp.status_code == 404
-        assert resp.json()["detail"] == "Resume was deleted during retry."
-
-    @patch("app.routers.resumes.parse_resume_to_json", new_callable=AsyncMock)
-    @patch("app.routers.resumes.db", new_callable=AsyncMock)
-    async def test_retry_does_not_swallow_unrelated_value_errors(
-        self,
-        mock_db: AsyncMock,
-        mock_parse: AsyncMock,
-        client: AsyncClient,
-        mock_resume_record: dict[str, Any],
-    ) -> None:
-        """Only ResumeNotFoundError becomes a 404; other ValueErrors propagate."""
-        mock_db.get_resume.return_value = {
-            **mock_resume_record,
-            "processing_status": "failed",
-        }
-        mock_db.claim_resume_processing.return_value = "token-1"
-        mock_parse.side_effect = RuntimeError("llm exploded")
-        mock_db.finish_resume_processing.side_effect = ValueError("Resume not found: res-123")
-
-        with pytest.raises(ValueError, match="Resume not found"):
-            async with client:
-                await client.post("/api/v1/resumes/res-123/retry-processing")
-
-
-class TestResumeNotFoundError:
-    """app.database.ResumeNotFoundError backward compatibility."""
-
-    def test_is_a_value_error(self):
-        """Subclassing ValueError keeps every pre-existing handler working."""
-        assert issubclass(ResumeNotFoundError, ValueError)
-
-        caught = False
-        try:
-            raise ResumeNotFoundError("res-123")
-        except ValueError as exc:
-            caught = True
-            assert isinstance(exc, ResumeNotFoundError)
-        assert caught
-
-    def test_carries_the_resume_id(self):
-        error = ResumeNotFoundError("res-123")
-        assert error.resume_id == "res-123"
-        assert "res-123" in str(error)
-
-    async def test_real_update_resume_raises_the_typed_error(self, tmp_path):
-        """The real Database.update_resume raises the typed error, not bare ValueError."""
-        from app.database import Database
-
-        database = Database(db_path=tmp_path / "typed_error.db")
-        try:
-            with pytest.raises(ResumeNotFoundError):
-                await database.update_resume("does-not-exist", {"title": "X"})
-        finally:
-            await database.close()
+        assert response.status_code == 200
+        assert response.json()["processing_error"] == "model_not_enabled"
 
 
 class TestUploadResume:

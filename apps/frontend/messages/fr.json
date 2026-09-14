@@ -30,8 +30,7 @@
     "unknown": "Inconnu",
     "keysCleared": "Clés API supprimées avec succès",
     "databaseReset": "Base de données réinitialisée avec succès",
-    "popupBlocked": "Fenêtre contextuelle bloquée. Veuillez autoriser les fenêtres contextuelles ou ouvrir cette URL manuellement : {url}",
-    "resumeDeleted": "Ce CV a été supprimé. Importez ou sélectionnez un autre CV."
+    "popupBlocked": "Fenêtre contextuelle bloquée. Veuillez autoriser les fenêtres contextuelles ou ouvrir cette URL manuellement : {url}"
   },
   "home": {
     "brandLine1": "Resume",
@@ -99,11 +98,11 @@
       "dropzoneTitle": "Cliquez ou déposez un fichier",
       "dropzoneSubtitle": "PDF, DOC, DOCX (Max 4 Mo)",
       "tryDifferentFile": "Essayer un autre fichier",
-      "parsingFailedKeepOpen": "L'analyse par IA a échoué. Essayez un autre fichier ou fermez cette boîte de dialogue."
-    },
-    "errors": {
-      "loadFailed": "Impossible de charger les CV. Veuillez réessayer.",
-      "deleteFailed": "Impossible de supprimer le CV. Votre CV actuel reste disponible."
+      "parsingFailedKeepOpen": "L'analyse par IA a échoué. Essayez un autre fichier ou fermez cette boîte de dialogue.",
+      "llmNotConfigured": "Aucun modèle d’IA utilisable n’est configuré. Enregistrez votre clé API dans les paramètres, puis réessayez.",
+      "modelNotEnabled": "La clé API est valide, mais le modèle sélectionné n’est pas activé dans Ark. Activez-le dans Ark Console puis réessayez.",
+      "modelRateLimited": "La clé API et le modèle sont valides, mais Ark a suspendu la limite d’inférence. Ajustez ou désactivez le mode Safe Experience dans Ark Console, puis réessayez.",
+      "actionsLabel": "Actions de récupération de l’import"
     }
   },
   "builder": {
@@ -118,13 +117,11 @@
       "localDraft": "Brouillon enregistré localement",
       "saveNow": "Enregistrer maintenant",
       "retrySave": "Réessayer",
-      "savedButton": "Enregistré",
-      "localDraftUnavailable": "Brouillon local indisponible"
+      "savedButton": "Enregistré"
     },
     "draftRecovery": {
       "title": "Restaurer le brouillon local ?",
       "description": "Un brouillon local du navigateur diffère de la copie enregistrée sur le serveur. Restaurez-le pour continuer l'édition, ou utilisez la copie du serveur et supprimez le brouillon local.",
-      "newDescription": "Ce navigateur contient un brouillon de CV non enregistré. Restaurez-le pour continuer à le modifier, ou supprimez-le pour recommencer.",
       "restoreDraft": "Restaurer le brouillon",
       "useServer": "Utiliser la copie serveur"
     },
@@ -270,17 +267,14 @@
         "newLabel": "Nouveau",
         "noContent": "Aucun contenu",
         "applying": "Application...",
-        "loading": "Génération du contenu amélioré...",
-        "retryRefresh": "Réessayer l’actualisation",
-        "refreshing": "Actualisation..."
+        "loading": "Génération du contenu amélioré..."
       },
       "errors": {
         "generationFailed": "Impossible de générer le contenu. Veuillez réessayer.",
         "applyFailed": "Impossible d'appliquer les modifications. Veuillez réessayer.",
         "resumeChanged": "Le contenu du CV a changé depuis la régénération. Veuillez régénérer et réessayer.",
         "noChangesToApply": "Aucune modification à appliquer.",
-        "networkError": "Erreur réseau. Veuillez vérifier votre connexion.",
-        "refreshFailed": "Les modifications ont été enregistrées, mais le CV n’a pas pu être actualisé. Réessayez l’actualisation."
+        "networkError": "Erreur réseau. Veuillez vérifier votre connexion."
       }
     },
     "jdMatch": {
@@ -500,12 +494,6 @@
       "coverLetterGenerateFailed": "Impossible de générer la lettre de motivation : {error}",
       "outreachGenerateFailed": "Impossible de générer le message de contact : {error}",
       "interviewPrepGenerateFailed": "Impossible de générer la préparation à l'entretien : {error}"
-    },
-    "leaveWithoutDraft": {
-      "title": "Quitter avec des modifications non enregistrées ?",
-      "description": "Vos dernières modifications n’ont pu être ni synchronisées avec le serveur ni enregistrées dans ce navigateur. Les quitter maintenant peut les perdre.",
-      "leave": "Quitter quand même",
-      "stay": "Continuer la modification"
     }
   },
   "enrichment": {
@@ -532,20 +520,14 @@
       "addingLabel": "Ajout",
       "existingCount": "({count} existant(s))",
       "newCount": "({count} nouveau(x))",
-      "noExistingDescription": "Aucune description existante",
-      "partialFailure": "Certains éléments n’ont pas pu être améliorés",
-      "partialFailureDescription": "Les éléments indiqués resteront inchangés. Vous pouvez appliquer les améliorations disponibles et réessayer les autres plus tard."
+      "noExistingDescription": "Aucune description existante"
     },
     "complete": {
       "title": "CV amélioré !",
       "updatedCountSingular": "{count} élément mis à jour avec succès",
       "updatedCountPlural": "{count} éléments mis à jour avec succès",
       "updatedFallback": "Votre CV a été mis à jour avec des descriptions améliorées",
-      "doneButton": "Terminé",
-      "refreshFailedTitle": "Enregistré — actualisation nécessaire",
-      "refreshFailed": "Les améliorations ont été enregistrées, mais cette vue n’a pas pu être actualisée. Réessayez pour afficher le CV à jour.",
-      "retryRefresh": "Réessayer l’actualisation",
-      "refreshing": "Actualisation du CV..."
+      "doneButton": "Terminé"
     },
     "noImprovements": {
       "title": "Votre CV est excellent !",
@@ -553,8 +535,7 @@
     },
     "error": {
       "title": "Une erreur s'est produite",
-      "unexpected": "Une erreur inattendue s'est produite",
-      "answerRequired": "Répondez à au moins une question avant de générer des améliorations."
+      "unexpected": "Une erreur inattendue s'est produite"
     }
   },
   "tailor": {
@@ -632,8 +613,7 @@
       "failedToGenerate": "Impossible de générer le CV. Vérifiez votre clé API dans les paramètres, puis réessayez.",
       "timeout": "L'aperçu du CV a expiré après {minutes} minutes. Réessayez avec une fiche de poste plus courte ou une consigne plus simple.",
       "failedToPreview": "Impossible de prévisualiser le CV. Vérifiez votre clé API dans les paramètres, puis réessayez.",
-      "failedToConfirm": "Impossible d'appliquer les modifications. Veuillez réessayer.",
-      "previewUnavailable": "Cet aperçu a expiré ou le CV source a changé. Générez un nouvel aperçu avant de sauvegarder."
+      "failedToConfirm": "Impossible d'appliquer les modifications. Veuillez réessayer."
     }
   },
   "settings": {
@@ -813,13 +793,9 @@
       "notProcessedYet": "Le CV n'a pas encore été traité. Veuillez utiliser la fonctionnalité de personnalisation pour générer un CV structuré.",
       "noDataAvailable": "Aucune donnée de CV disponible.",
       "failedToLoad": "Impossible de charger les données du CV.",
-      "failedToDelete": "Impossible de supprimer le CV. Veuillez réessayer.",
-      "failedToDownload": "Impossible de télécharger le CV. Veuillez réessayer.",
-      "failedToRename": "Impossible de renommer le CV. Veuillez réessayer."
+      "failedToDelete": "Impossible de supprimer le CV. Veuillez réessayer."
     },
-    "titlePlaceholder": "Saisissez le titre du CV...",
-    "downloadFailedTitle": "Échec du téléchargement",
-    "renameFailedTitle": "Échec du renommage"
+    "titlePlaceholder": "Saisissez le titre du CV..."
   },
   "preview": {
     "margins": "Marges",
@@ -969,11 +945,7 @@
       "review": "Vérifier et terminer",
       "create": "Créer le CV principal",
       "keepAdding": "Continuer à ajouter",
-      "backToDashboard": "Retour au tableau de bord",
-      "openCreated": "Ouvrir le CV créé",
-      "retryDraftBackup": "Réessayer la sauvegarde locale",
-      "stay": "Rester ici",
-      "leaveWithoutSaving": "Quitter sans enregistrer"
+      "backToDashboard": "Retour au tableau de bord"
     },
     "preview": {
       "label": "Brouillon en direct",
@@ -986,16 +958,7 @@
     },
     "errors": {
       "turnFailed": "L'assistant n'a pas pu enregistrer cette réponse. Veuillez réessayer.",
-      "finalizeFailed": "L'assistant n'a pas pu créer votre CV principal. Veuillez réessayer.",
-      "createdNavigationFailed": "Votre CV principal a été créé, mais cette page n’a pas pu l’ouvrir automatiquement. Utilisez le bouton ci-dessous pour continuer."
-    },
-    "draftStorageUnavailable": {
-      "title": "Brouillon local indisponible",
-      "description": "La progression la plus récente de l’assistant se trouve uniquement dans cet onglet. Réessayez la sauvegarde locale avant de quitter ou de recharger la page."
-    },
-    "leaveWithoutDraft": {
-      "title": "Quitter sans sauvegarde locale ?",
-      "description": "La progression la plus récente de l’assistant sera perdue si vous quittez ou rechargez la page avant la réussite de la sauvegarde locale."
+      "finalizeFailed": "L'assistant n'a pas pu créer votre CV principal. Veuillez réessayer."
     },
     "entry": {
       "kicker": "Configuration du CV principal",
@@ -1013,22 +976,9 @@
         "description": "Répondez à des questions ciblées et laissez l'assistant assembler un premier brouillon solide de votre CV principal.",
         "action": "Démarrer l'assistant"
       }
-    },
-    "created": {
-      "title": "CV principal créé",
-      "description": "Votre CV principal a été créé. Ouvrez-le pour continuer à le modifier."
     }
   },
   "tracker": {
-    "manage": "Gérer",
-    "manageDialog": {
-      "title": "Gérer les colonnes",
-      "description": "Choisissez les étapes affichées sur le tableau.",
-      "visible": "Visible",
-      "hidden": "Masquée",
-      "lastVisibleHint": "Au moins une étape doit rester visible.",
-      "close": "Terminé"
-    },
     "scroll": {
       "prev": "Faire défiler à gauche",
       "next": "Faire défiler à droite",

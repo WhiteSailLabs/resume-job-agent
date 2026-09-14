@@ -133,5 +133,12 @@ config.json
 /artifacts/
 /.claude/skills/monitor-e2e/
 
+# Local job-agent runtime and browser test output
+/.local/
+/.playwright-cli/
+/output/
+**/:memory:.ses
+apps/frontend/output/
+
 # Superpowers brainstorming visual-companion scratch (local only)
 /.superpowers/

@@ -113,11 +113,7 @@ async def generate_interview_prep(
         output_language=get_language_name(language),
     )
     config = get_llm_config()
-    max_tokens = get_safe_max_tokens(
-        get_model_name(config),
-        requested=8192,
-        config=config,
-    )
+    max_tokens = get_safe_max_tokens(get_model_name(config), requested=8192)
 
     result = await complete_json(
         prompt=prompt,

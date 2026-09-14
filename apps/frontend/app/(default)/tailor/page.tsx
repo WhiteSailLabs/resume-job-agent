@@ -22,14 +22,9 @@ import { useTranslations } from '@/lib/i18n';
 import { DiffPreviewModal } from '@/components/tailor/diff-preview-modal';
 import { ATSScoreCard } from '@/components/tailor/ats-score-card';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { useOperationOwner } from '@/hooks/use-operation-owner';
 
 export default function TailorPage() {
   const { t } = useTranslations();
-  const { begin, isCurrent, invalidate } = useOperationOwner('tailor');
-  const confirmedResponses = useRef(new WeakMap<ImprovedResult, ImprovedResult>());
-  const countedResumes = useRef(new Set<string>());
-  const confirmationBusy = useRef(false);
   const [jobDescription, setJobDescription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,6 +89,27 @@ export default function TailorPage() {
     }
   }, [router]);
 
+  // Job Discovery hands user-approved JDs here. This keeps the existing
+  // tailoring flow as the single resume-generation surface.
+  useEffect(() => {
+    const rawDraft = sessionStorage.getItem('job_discovery_draft');
+    if (!rawDraft) return;
+    try {
+      const draft = JSON.parse(rawDraft) as {
+        title?: string;
+        company?: string;
+        location?: string;
+        jd?: string;
+      };
+      if (draft.jd) {
+        const heading = [draft.title, draft.company, draft.location].filter(Boolean).join('｜');
+        setJobDescription(`${heading}\n\n${draft.jd}`);
+      }
+    } catch {
+      // Ignore stale, malformed browser-only mock state.
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -145,55 +161,29 @@ export default function TailorPage() {
     return {
       resume_id: masterResumeId,
       job_id: result.data.job_id,
-      preview_id: result.data.preview_id ?? null,
       improved_data: resumePreview as ResumeData,
       improvements:
         result.data.improvements?.map((item) => ({
           suggestion: item.suggestion,
           lineNumber: typeof item.lineNumber === 'number' ? item.lineNumber : null,
         })) ?? [],
+      tailoring_plan: result.data.tailoring_plan ?? null,
+      quality_audit: result.data.quality_audit ?? null,
     };
   };
 
-  const confirmAndNavigate = async (result: ImprovedResult, token: number) => {
-    let confirmed = confirmedResponses.current.get(result);
-    if (!confirmed) {
-      const expiresAt = Date.parse(result.data.preview_expires_at ?? '');
-      if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
-        throw new Error('Preview expired');
-      }
-      confirmed = await confirmImproveResume(buildConfirmPayload(result));
-      // Acknowledgement is durable even if a later client effect fails.
-      confirmedResponses.current.set(result, confirmed);
-    }
-    if (!isCurrent(token)) return;
-    const newResumeId = confirmed?.data?.resume_id;
-    if (newResumeId && !countedResumes.current.has(newResumeId)) {
-      countedResumes.current.add(newResumeId);
-      incrementImprovements();
-      incrementResumes();
-    }
+  const confirmAndNavigate = async (result: ImprovedResult) => {
+    const confirmed = await confirmImproveResume(buildConfirmPayload(result));
+    incrementImprovements();
+    incrementResumes();
     setImprovedData(confirmed);
-    router.push(newResumeId ? `/resumes/${newResumeId}` : '/builder');
-  };
 
-  const offerFreshPreview = (failure: unknown): boolean => {
-    if (!(failure instanceof Error) || !/preview expired|status (400|409)\b/i.test(failure.message))
-      return false;
-    invalidate();
-    confirmationBusy.current = false;
-    missingDiffConfirmInFlight.current = false;
-    setIsConfirming(false);
-    setIsLoading(false);
-    setShowDiffModal(false);
-    setShowMissingDiffDialog(false);
-    setPendingResult(null);
-    setMissingDiffResult(null);
-    setDiffConfirmError(null);
-    setMissingDiffError(null);
-    setError(t('tailor.errors.previewUnavailable'));
-    setShowRegenerateDialog(true);
-    return true;
+    const newResumeId = confirmed?.data?.resume_id;
+    if (newResumeId) {
+      router.push(`/resumes/${newResumeId}`);
+    } else {
+      router.push('/builder');
+    }
   };
 
   const getGenerateValidationError = (trimmedDescription: string) => {
@@ -204,17 +194,15 @@ export default function TailorPage() {
     return null;
   };
 
-  const runGenerate = async (resumeId: string, description: string, token: number) => {
+  const runGenerate = async (resumeId: string, description: string) => {
     try {
       // 1. Upload Job Description
       // The API expects an array of strings
       const jobId = await uploadJobDescriptions([description], resumeId);
-      if (!isCurrent(token)) return;
       incrementJobs(); // Update cached counter
 
       // 2. Preview Resume
       const result = await previewImproveResume(resumeId, jobId, selectedPromptId);
-      if (!isCurrent(token)) return;
 
       if (!result?.data?.diff_summary || !result?.data?.detailed_changes) {
         console.warn('Diff data missing for tailor preview; requesting user confirmation.');
@@ -233,7 +221,6 @@ export default function TailorPage() {
       setPendingResult(result);
       setShowDiffModal(true);
     } catch (err) {
-      if (!isCurrent(token)) return;
       console.error(err);
       setError(getPreviewErrorMessage(err, t));
     }
@@ -248,58 +235,41 @@ export default function TailorPage() {
       return;
     }
     const resumeId = masterResumeId;
-    const token = begin();
-    if (token === null) return;
     setIsLoading(true);
     setError(null);
     startTimer();
     try {
-      await runGenerate(resumeId, trimmedDescription, token);
+      await runGenerate(resumeId, trimmedDescription);
     } finally {
-      if (isCurrent(token)) {
-        setIsLoading(false);
-        stopTimer();
-      }
+      setIsLoading(false);
+      stopTimer();
     }
   };
 
   // User confirms changes
   const handleConfirmChanges = async () => {
-    if (!pendingResult || confirmationBusy.current) return;
-    const token = begin();
-    if (token === null) return;
-    confirmationBusy.current = true;
+    if (!pendingResult || isConfirming) return;
 
     setIsConfirming(true);
     setError(null);
     setDiffConfirmError(null);
 
     try {
-      await confirmAndNavigate(pendingResult, token);
-      if (!isCurrent(token)) return;
+      await confirmAndNavigate(pendingResult);
       setShowDiffModal(false);
       setPendingResult(null);
     } catch (err) {
-      if (!isCurrent(token)) return;
       console.error(err);
-      if (offerFreshPreview(err)) return;
       const errorMessage = t('tailor.errors.failedToConfirm');
       setError(errorMessage);
       setDiffConfirmError(errorMessage);
     } finally {
-      if (isCurrent(token)) {
-        confirmationBusy.current = false;
-        setIsConfirming(false);
-      }
+      setIsConfirming(false);
     }
   };
 
   // User rejects changes
   const handleRejectChanges = () => {
-    if (confirmationBusy.current) return;
-    invalidate();
-    confirmationBusy.current = false;
-    setIsConfirming(false);
     setShowDiffModal(false);
     setPendingResult(null);
     setDiffConfirmError(null);
@@ -307,18 +277,12 @@ export default function TailorPage() {
   };
 
   const handleCloseDiffModal = () => {
-    if (confirmationBusy.current) return;
-    invalidate();
-    confirmationBusy.current = false;
-    setIsConfirming(false);
     setShowDiffModal(false);
     setPendingResult(null);
     setDiffConfirmError(null);
   };
 
   const handleCloseMissingDiffDialog = () => {
-    invalidate();
-    setIsLoading(false);
     setShowMissingDiffDialog(false);
     setMissingDiffResult(null);
     setMissingDiffError(null);
@@ -327,28 +291,21 @@ export default function TailorPage() {
 
   const handleMissingDiffConfirm = async () => {
     if (!missingDiffResult || isLoading || missingDiffConfirmInFlight.current) return;
-    const token = begin();
-    if (token === null) return;
     missingDiffConfirmInFlight.current = true;
     setIsLoading(true);
     setError(null);
     setMissingDiffError(null);
     try {
-      await confirmAndNavigate(missingDiffResult, token);
-      if (!isCurrent(token)) return;
+      await confirmAndNavigate(missingDiffResult);
       handleCloseMissingDiffDialog();
     } catch (err) {
-      if (!isCurrent(token)) return;
       console.error(err);
-      if (offerFreshPreview(err)) return;
       const errorMessage = t('tailor.errors.failedToConfirm');
       setError(errorMessage);
       setMissingDiffError(errorMessage);
     } finally {
-      if (isCurrent(token)) {
-        missingDiffConfirmInFlight.current = false;
-        setIsLoading(false);
-      }
+      missingDiffConfirmInFlight.current = false;
+      setIsLoading(false);
     }
   };
 
@@ -362,18 +319,14 @@ export default function TailorPage() {
       return;
     }
     const resumeId = masterResumeId;
-    const token = begin();
-    if (token === null) return;
     setIsLoading(true);
     setError(null);
     startTimer();
     try {
-      await runGenerate(resumeId, trimmedDescription, token);
+      await runGenerate(resumeId, trimmedDescription);
     } finally {
-      if (isCurrent(token)) {
-        setIsLoading(false);
-        stopTimer();
-      }
+      setIsLoading(false);
+      stopTimer();
     }
   };
 
@@ -474,7 +427,7 @@ export default function TailorPage() {
           </div>
 
           {error && (
-            <div className="p-4 bg-red-100 border-2 border-red-600 text-red-600 text-sm font-mono flex items-center gap-2">
+            <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-sm font-mono flex items-center gap-2">
               <span>!</span> {error}
             </div>
           )}
@@ -542,7 +495,7 @@ export default function TailorPage() {
       <ConfirmDialog
         open={showMissingDiffDialog}
         onOpenChange={(open) => {
-          if (!open && !missingDiffConfirmInFlight.current) {
+          if (!open) {
             handleCloseMissingDiffDialog();
           }
         }}
@@ -553,11 +506,8 @@ export default function TailorPage() {
         variant="warning"
         closeOnConfirm={false}
         onConfirm={handleMissingDiffConfirm}
-        onCancel={() => {
-          if (!missingDiffConfirmInFlight.current) handleCloseMissingDiffDialog();
-        }}
+        onCancel={handleCloseMissingDiffDialog}
         confirmDisabled={isLoading || !missingDiffResult}
-        cancelDisabled={isLoading}
         errorMessage={missingDiffError ?? undefined}
       />
     </div>

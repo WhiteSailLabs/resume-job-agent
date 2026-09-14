@@ -152,6 +152,25 @@ class TestResolveApiKey:
         monkeypatch.setattr("app.llm.settings.llm_api_key", "sk-paid-secret")
         assert resolve_api_key({}, "openai") == "sk-paid-secret"
 
+    def test_agent_plan_uses_dedicated_key_only_for_official_plan_base(self, monkeypatch):
+        monkeypatch.setattr("app.llm.settings.llm_api_key", "")
+        monkeypatch.setattr("app.llm.settings.agent_plan_api_key", "ark-plan-secret")
+
+        assert (
+            resolve_api_key(
+                {"api_base": "https://ark.cn-beijing.volces.com/api/plan/v3"},
+                "openai_compatible",
+            )
+            == "ark-plan-secret"
+        )
+        assert (
+            resolve_api_key(
+                {"api_base": "https://ark.cn-beijing.volces.com/api/v3"},
+                "openai",
+            )
+            == ""
+        )
+
 
 # ---------------------------------------------------------------------------
 # _effective_api_key — blank-key sentinel for openai_compatible

@@ -22,6 +22,7 @@ vi.mock('@/components/enrichment/enrichment-modal', () => ({ EnrichmentModal: ()
 vi.mock('@/components/dashboard/resume-component', () => ({ default: () => null }));
 vi.mock('@/lib/api/resume', () => ({
   fetchResume: vi.fn(),
+  fetchResumeQuality: vi.fn().mockResolvedValue(null),
   deleteResume: vi.fn(),
   retryProcessing: vi.fn(),
   renameResume: vi.fn(),
@@ -52,11 +53,11 @@ describe('ResumeViewerPage — delete from the processing-failed error state', (
     expect(await screen.findByText('resumeViewer.errors.processingFailed')).toBeInTheDocument();
 
     // Click "Delete & Start Over".
-    fireEvent.click(screen.getByRole('button', { name: 'resumeViewer.deleteAndStartOver' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除这份简历' }));
 
     // The confirmation dialog must actually mount in the error state (regression).
     const confirmButton = await screen.findByRole('button', {
-      name: 'confirmations.deleteResumeConfirmLabel',
+      name: '确认删除',
     });
     fireEvent.click(confirmButton);
 
@@ -70,7 +71,7 @@ describe('ResumeViewerPage — delete from the processing-failed error state', (
     // dialog because the error card also carries a "return to dashboard" button.
     await screen.findByText('resumeViewer.deletedTitle');
     const dialog = screen.getByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'resumeViewer.returnToDashboard' }));
-    expect(push).toHaveBeenCalledWith('/dashboard');
+    fireEvent.click(within(dialog).getByRole('button', { name: '返回简历库' }));
+    expect(push).toHaveBeenCalledWith('/resumes');
   });
 });

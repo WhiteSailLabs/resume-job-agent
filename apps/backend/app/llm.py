@@ -4,7 +4,6 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -13,8 +12,6 @@ from litellm import Router
 from litellm.router import RetryPolicy
 from pydantic import BaseModel
 
-from app.ai_limits import validate_prompt_size
-from app.ai_budget import remaining_timeout
 from app.config import load_config_file, save_config_file, settings
 
 LITELLM_LOGGER_NAMES = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
@@ -53,42 +50,6 @@ MAX_JSON_CONTENT_SIZE = 1024 * 1024  # 1MB
 # output limits. Callers should use get_safe_max_tokens() so this is
 # automatically clamped to the model's actual capacity.
 DEFAULT_JSON_MAX_TOKENS = 8192
-
-# ---------------------------------------------------------------------------
-# OpenAI-compatible endpoint allowlists
-#
-# Why this exists: custom OpenAI-compatible servers expose no capability
-# discovery API, so there is no way to ask an endpoint at runtime whether it
-# accepts OpenAI JSON mode (``response_format={"type": "json_object"}``).
-# Sending it optimistically to an unverified server can turn a prompt-only JSON
-# request that previously worked into a hard 400, so support is opt-in: an
-# endpoint gets JSON mode only when it appears below.
-#
-# Bar for adding an entry: the endpoint must be *verified to support OpenAI JSON
-# mode* - a real request against the live endpoint that came back with a
-# parseable JSON body. A vendor doc claiming OpenAI compatibility is not enough.
-#
-# Which constant to edit when adding a provider:
-#   * A server that accepts plain OpenAI JSON mode -> add its lowercase
-#     hostname to ``JSON_MODE_VERIFIED_HOSTS``. Hosts are compared against the
-#     exact parsed hostname of ``api_base``, so lookalike domains such as
-#     ``evil-opencode.ai`` never match.
-#   * A new OpenCode Zen HY3 model alias -> add it (lowercased) to
-#     ``OPENCODE_ZEN_HY3_MODELS``. The Zen route is separate from the plain host
-#     allowlist because it also drives a vendor-specific ``no_think`` reasoning
-#     switch, and must stay scoped to the exact gateway/model pair.
-# ---------------------------------------------------------------------------
-
-#: Exact hostname of the OpenCode Zen gateway.
-OPENCODE_ZEN_HOST: str = "opencode.ai"
-#: Path prefix identifying the Zen gateway on that host (``/zen``, ``/zen/v1``, ...).
-OPENCODE_ZEN_PATH_PREFIX: str = "/zen"
-#: Lowercased model names served by Zen's HY3-compatible route.
-OPENCODE_ZEN_HY3_MODELS: frozenset[str] = frozenset({"hy3", "hy3-free"})
-
-#: Hostnames verified to accept OpenAI JSON mode over an ``openai_compatible``
-#: endpoint. See the comment block above before adding to this set.
-JSON_MODE_VERIFIED_HOSTS: frozenset[str] = frozenset({"api.stepfun.com"})
 
 
 class LLMConfig(BaseModel):
@@ -254,61 +215,11 @@ def _effective_api_key(provider: str, api_key: str) -> str:
     return api_key
 
 
-def _uses_opencode_zen_hy3(config: LLMConfig) -> bool:
-    """Return whether a request targets OpenCode Zen's HY3-compatible route.
-
-    HY3 is a reasoning model.  Zen exposes its supported switch as top-level
-    ``reasoning_effort: \"no_think\"``.  Scope this workaround to the exact
-    gateway/model pair - ``OPENCODE_ZEN_HOST`` + ``OPENCODE_ZEN_PATH_PREFIX`` +
-    ``OPENCODE_ZEN_HY3_MODELS`` - so an unrelated OpenAI-compatible server never
-    receives a vendor-specific parameter.
-    """
-    if config.provider != "openai_compatible" or not isinstance(config.model, str):
-        return False
-    if config.model.strip().lower() not in OPENCODE_ZEN_HY3_MODELS:
-        return False
-    if not isinstance(config.api_base, str):
-        return False
-    parsed = urlsplit(config.api_base.strip())
-    if (parsed.hostname or "").lower() != OPENCODE_ZEN_HOST:
-        return False
-    # ``/zen``, ``/zen/`` and ``/zen/<segment>`` are all the Zen gateway; a
-    # merely prefixed path such as ``/zenith`` is a different service.
-    path = parsed.path.rstrip("/")
-    return path == OPENCODE_ZEN_PATH_PREFIX or path.startswith(
-        f"{OPENCODE_ZEN_PATH_PREFIX}/"
-    )
-
-
-def _openai_compatible_supports_json_mode(config: LLMConfig) -> bool:
-    """Return whether a compatible endpoint is known to accept JSON mode.
-
-    Custom OpenAI-compatible servers have no uniform capability-discovery API.
-    Sending ``response_format`` to every one of them can turn a prompt-only
-    JSON request that previously worked into a 400, so this stays an allowlist:
-    an endpoint qualifies only when its host is in ``JSON_MODE_VERIFIED_HOSTS``
-    or it is the OpenCode Zen HY3 route. Read the allowlist comment block above
-    those constants before adding an entry.
-    """
-    if config.provider != "openai_compatible" or not isinstance(config.api_base, str):
-        return False
-    host = (urlsplit(config.api_base.strip()).hostname or "").lower()
-    return _uses_opencode_zen_hy3(config) or host in JSON_MODE_VERIFIED_HOSTS
-
-
-def _extract_text_parts(
-    value: Any,
-    depth: int = 0,
-    max_depth: int = 10,
-    *,
-    exclude_reasoning: bool = False,
-) -> list[str]:
+def _extract_text_parts(value: Any, depth: int = 0, max_depth: int = 10) -> list[str]:
     """Recursively extract text segments from nested response structures.
 
     Handles strings, lists, dicts with 'text'/'content'/'value' keys, and objects
-    with text/content attributes. Limits recursion depth to avoid cycles.  Set
-    ``exclude_reasoning`` for structured output, where typed reasoning blocks
-    must not be joined with a model's final answer.
+    with text/content attributes. Limits recursion depth to avoid cycles.
 
     Args:
         value: Input value that may contain text in strings, lists, dicts, or objects.
@@ -331,82 +242,26 @@ def _extract_text_parts(
         parts: list[str] = []
         next_depth = depth + 1
         for item in value:
-            parts.extend(
-                _extract_text_parts(
-                    item,
-                    next_depth,
-                    max_depth,
-                    exclude_reasoning=exclude_reasoning,
-                )
-            )
+            parts.extend(_extract_text_parts(item, next_depth, max_depth))
         return parts
 
     if isinstance(value, dict):
-        block_type = value.get("type")
-        if (
-            exclude_reasoning
-            and isinstance(block_type, str)
-            and block_type.lower() in _REASONING_BLOCK_TYPES
-        ):
-            return []
         next_depth = depth + 1
         if "text" in value:
-            return _extract_text_parts(
-                value.get("text"),
-                next_depth,
-                max_depth,
-                exclude_reasoning=exclude_reasoning,
-            )
+            return _extract_text_parts(value.get("text"), next_depth, max_depth)
         if "content" in value:
-            return _extract_text_parts(
-                value.get("content"),
-                next_depth,
-                max_depth,
-                exclude_reasoning=exclude_reasoning,
-            )
+            return _extract_text_parts(value.get("content"), next_depth, max_depth)
         if "value" in value:
-            return _extract_text_parts(
-                value.get("value"),
-                next_depth,
-                max_depth,
-                exclude_reasoning=exclude_reasoning,
-            )
+            return _extract_text_parts(value.get("value"), next_depth, max_depth)
         return []
 
-    block_type = getattr(value, "type", None)
-    if (
-        exclude_reasoning
-        and isinstance(block_type, str)
-        and block_type.lower() in _REASONING_BLOCK_TYPES
-    ):
-        return []
     next_depth = depth + 1
     if hasattr(value, "text"):
-        return _extract_text_parts(
-            getattr(value, "text"),
-            next_depth,
-            max_depth,
-            exclude_reasoning=exclude_reasoning,
-        )
+        return _extract_text_parts(getattr(value, "text"), next_depth, max_depth)
     if hasattr(value, "content"):
-        return _extract_text_parts(
-            getattr(value, "content"),
-            next_depth,
-            max_depth,
-            exclude_reasoning=exclude_reasoning,
-        )
-    if hasattr(value, "value"):
-        return _extract_text_parts(
-            getattr(value, "value"),
-            next_depth,
-            max_depth,
-            exclude_reasoning=exclude_reasoning,
-        )
+        return _extract_text_parts(getattr(value, "content"), next_depth, max_depth)
 
     return []
-
-
-_REASONING_BLOCK_TYPES = frozenset({"analysis", "reasoning", "reasoning_content", "thinking"})
 
 
 def _join_text_parts(parts: list[str]) -> str | None:
@@ -485,36 +340,6 @@ def _extract_choice_text(choice: Any) -> str | None:
     return None
 
 
-def _extract_choice_primary_text(choice: Any) -> str | None:
-    """Extract only a model's final answer, never its reasoning trace.
-
-    Reasoning models commonly return their chain-of-thought in
-    ``reasoning_content`` before (or, when the output budget is exhausted,
-    instead of) the user-facing ``content``.  That trace is not an answer and
-    must never be fed into the JSON parser.  The broader
-    :func:`_extract_choice_text` intentionally retains its reasoning fallback
-    for the health-check UI, where it is useful evidence that a provider can
-    respond.
-    """
-    message = _safe_get(choice, "message")
-    content = _join_text_parts(
-        _extract_text_parts(_safe_get(message, "content"), exclude_reasoning=True)
-    )
-    if content:
-        return content
-
-    for field in ("text", "delta"):
-        value = _safe_get(choice, field)
-        if value is not None:
-            extracted = _join_text_parts(
-                _extract_text_parts(value, exclude_reasoning=True)
-            )
-            if extracted:
-                return extracted
-
-    return None
-
-
 def _to_code_block(content: str | None, language: str = "text") -> str:
     """Wrap content in a markdown code block for client display."""
     text = (content or "").strip()
@@ -583,6 +408,17 @@ _PROVIDERS_WITHOUT_ENV_KEY_FALLBACK: frozenset[str] = frozenset(
 )
 
 
+def _is_ark_agent_plan_base(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed = urlsplit(value.strip())
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "ark.cn-beijing.volces.com"
+        and parsed.path.rstrip("/") in {"/api/plan", "/api/plan/v3"}
+    )
+
+
 def resolve_api_key(stored: dict, provider: str) -> str:
     """Resolve the effective API key from stored config.
 
@@ -603,11 +439,17 @@ def resolve_api_key(stored: dict, provider: str) -> str:
         if not isinstance(api_keys, dict):
             api_keys = {}
         config_provider = _PROVIDER_KEY_MAP.get(provider, provider)
-        env_default = (
-            ""
-            if provider in _PROVIDERS_WITHOUT_ENV_KEY_FALLBACK
-            else settings.llm_api_key
-        )
+        env_default = "" if provider in _PROVIDERS_WITHOUT_ENV_KEY_FALLBACK else settings.llm_api_key
+        # Agent Plan is a separate ARK channel. Only allow its dedicated
+        # Keychain-injected credential to flow to the exact official Plan base.
+        if (
+            not env_default
+            and provider in {"openai", "openai_compatible"}
+            and _is_ark_agent_plan_base(
+                stored.get("api_base") or settings.llm_api_base
+            )
+        ):
+            env_default = settings.agent_plan_api_key
         api_key = api_keys.get(config_provider, env_default)
     return api_key
 
@@ -739,33 +581,6 @@ _router_config_key: str = ""
 _router_lock = threading.Lock()
 
 
-class _PolicyRouter(Router):
-    """Apply the complete app retry policy with the installed LiteLLM Router.
-
-    LiteLLM 1.86.2's retry-policy dispatcher does not classify
-    ``InternalServerError`` even though ``RetryPolicy`` exposes the matching
-    field. Its ``None`` result falls back to the Router-wide retry count.
-    Keep that compatibility correction confined to the omitted exception.
-    """
-
-    async def make_call(
-        self,
-        original_function: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        try:
-            return await super().make_call(original_function, *args, **kwargs)
-        except litellm.InternalServerError as error:
-            # Verified against pinned LiteLLM 1.86.2: the outer
-            # async_function_with_retries awaits self.make_call(), then reads
-            # e.num_retries in its except block before consulting retry policy.
-            # Base make_call performs one provider invocation, not the retry
-            # loop, so this override is observed before another attempt.
-            error.num_retries = 2
-            raise
-
-
 def _config_fingerprint(config: LLMConfig) -> str:
     """Generate a fingerprint to detect config changes.
 
@@ -793,7 +608,7 @@ def _build_router(config: LLMConfig) -> Router:
     if api_version:
         litellm_params["api_version"] = api_version
 
-    return _PolicyRouter(
+    return Router(
         model_list=[
             {
                 "model_name": "primary",
@@ -974,7 +789,6 @@ async def complete(
 
     Transport retries (429, 500, timeout) are handled by the Router.
     """
-    validate_prompt_size(prompt + (system_prompt or ""))
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -988,13 +802,9 @@ async def complete(
             "model": "primary",
             "messages": messages,
             "max_tokens": max_tokens,
-            "timeout": remaining_timeout(
-                _calculate_timeout("completion", max_tokens, config.provider)
-            ),
+            "timeout": _calculate_timeout("completion", max_tokens, config.provider),
         }
-        if _supports_temperature(
-            model_name, temperature, reasoning_effort=config.reasoning_effort
-        ):
+        if _supports_temperature(model_name, temperature):
             kwargs["temperature"] = temperature
         if config.reasoning_effort:
             kwargs["reasoning_effort"] = config.reasoning_effort
@@ -1007,12 +817,9 @@ async def complete(
         # Strip thinking tags from reasoning models (deepseek-r1, qwq, etc.)
         if "<think>" in content:
             content = _strip_thinking_tags(content)
-        content = content.strip()
-        if not content:
-            raise ValueError("Response contained no visible output")
+            if not content:
+                raise ValueError("Response contained only thinking content, no output")
         return content
-    except TimeoutError:
-        raise
     except Exception as e:
         # Log the actual error server-side for debugging
         logging.error(f"LLM completion failed: {e}", extra={
@@ -1082,11 +889,7 @@ def _is_response_format_unsupported(error: Exception) -> bool:
 
 FALLBACK_MAX_TOKENS = 4096
 
-def get_safe_max_tokens(
-    model_name: str,
-    requested: int = DEFAULT_JSON_MAX_TOKENS,
-    config: LLMConfig | None = None,
-) -> int:
+def get_safe_max_tokens(model_name: str, requested: int = DEFAULT_JSON_MAX_TOKENS) -> int:
     """Return a token count safe for the given model, clamped to its output limit.
 
     Queries LiteLLM's model registry for ``max_output_tokens`` and returns
@@ -1094,14 +897,11 @@ def get_safe_max_tokens(
     what the backend actually supports.
 
     If the model is not in the registry (e.g. custom Ollama models), it falls
-    back to a conservative limit. The verified OpenCode Zen HY3 route is an
-    exception because JSON extraction disables reasoning for that model and
-    needs the full structured-output budget.
+    back to a safe conservative limit (FALLBACK_MAX_TOKENS).
 
     Args:
         model_name: LiteLLM-formatted model name (from get_model_name).
         requested: Desired token budget; defaults to DEFAULT_JSON_MAX_TOKENS.
-        config: Optional provider configuration for scoped compatibility rules.
 
     Returns:
         Safe token count, clamped correctly and always >= 1.
@@ -1124,15 +924,11 @@ def get_safe_max_tokens(
     except Exception:
         pass  # Model not in registry, drop down to fallback logic
 
-    fallback_limit = (
-        DEFAULT_JSON_MAX_TOKENS
-        if config is not None and _uses_opencode_zen_hy3(config)
-        else FALLBACK_MAX_TOKENS
-    )
-    safe = min(safe_requested, fallback_limit)
+    safe = min(safe_requested, FALLBACK_MAX_TOKENS)
     logging.debug(
-        "Model %s not in LiteLLM registry, using fallback max_tokens %d",
+        "Model %s not in LiteLLM registry, clamping requested max_tokens %d → %d constraint",
         model_name,
+        safe_requested,
         safe,
     )
     return safe
@@ -1156,9 +952,16 @@ def _appears_truncated(data: dict, schema_type: str = "resume") -> bool:
         return False
 
     if schema_type == "resume":
-        # A resume can legitimately omit or empty every optional section.
-        # Callers that need stronger guarantees provide a response validator
-        # based on their source contract.
+        # Full resume structure: check for empty required arrays
+        suspicious_empty_arrays = ["workExperience", "education", "skills"]
+        for key in suspicious_empty_arrays:
+            if key in data and data[key] == []:
+                # Log warning - these are rarely empty in real resumes
+                logging.warning(
+                    "Possible truncation detected: '%s' is empty",
+                    key,
+                )
+                return True
         return False
 
     if schema_type == "enrichment":
@@ -1195,29 +998,21 @@ def _appears_truncated(data: dict, schema_type: str = "resume") -> bool:
     return False
 
 
-def _supports_temperature(
-    model_name: str,
-    temperature: float | None = None,
-    reasoning_effort: str | None = None,
-) -> bool:
+def _supports_temperature(model_name: str, temperature: float | None = None) -> bool:
     """Check if the model supports the given temperature value.
 
     Uses LiteLLM model registry for capability detection, with
-    narrowly scoped fallbacks for known restrictions:
+    provider-specific fallbacks for known restrictions:
       - Anthropic claude-opus-4.*: temperature is deprecated
       - Moonshot kimi-k2.6: only temperature=1 allowed
-      - Reasoning GPT-5 models: non-default values require both registry
-        support for no-reasoning mode and an omitted reasoning effort
 
     Queries LiteLLM's model info for every provider so that capability is
-    determined from the registry rather than a provider-wide exemption.
+    always determined from the registry rather than a hardcoded list.
 
     Args:
         model_name: LiteLLM-formatted model name (from get_model_name).
         temperature: The temperature value to check. If None, returns True
             (caller isn't setting a specific value).
-        reasoning_effort: Configured reasoning mode. None means the request
-            omits the parameter and uses a model's no-reasoning default.
 
     Returns:
         True if the model supports the given temperature, False otherwise.
@@ -1252,70 +1047,21 @@ def _supports_temperature(
     if "kimi-k2.6" in model_name.lower() and temperature != 1.0:
         return False
 
-    # GPT-5 reasoning models allow flexible sampling only when the model map
-    # advertises a no-reasoning mode and the application omits reasoning_effort.
-    # LiteLLM routes the exact gpt-5-chat* family through its regular chat
-    # transform (versioned names such as gpt-5.1-chat remain reasoning models),
-    # so preserve sampling for that family even though its current registry
-    # metadata says supports_reasoning=True. Provider prefixes are ignored so
-    # OpenAI, Azure, and registered compatible aliases receive the same
-    # capability decision. Unknown compatible aliases returned False above.
-    normalized_model = model_name.rsplit("/", 1)[-1].lower()
-    is_reasoning_gpt5 = (
-        normalized_model.startswith("gpt-5")
-        and not normalized_model.startswith("gpt-5-chat")
-    )
-    reasoning_capability = info.get("supports_reasoning")
-    if (
-        is_reasoning_gpt5
-        and temperature != 1.0
-        and not isinstance(reasoning_capability, bool)
-    ):
-        logging.warning(
-            "Missing or invalid reasoning capability for %s; omitting temperature",
-            model_name,
-        )
-        return False
-    if (
-        is_reasoning_gpt5
-        and reasoning_capability is True
-        and temperature != 1.0
-    ):
-        if not isinstance(info.get("supports_none_reasoning_effort"), bool):
-            logging.warning(
-                "Missing or invalid no-reasoning capability for %s; omitting temperature",
-                model_name,
-            )
-        supports_no_reasoning = (
-            info.get("supports_none_reasoning_effort") is True
-        )
-        if not supports_no_reasoning or reasoning_effort is not None:
-            return False
-
     return True
 
 
-def _get_retry_temperature(
-    model_name: str,
-    attempt: int,
-    base_temp: float = 0.1,
-    reasoning_effort: str | None = None,
-) -> float | None:
+def _get_retry_temperature(model_name: str, attempt: int, base_temp: float = 0.1) -> float | None:
     """LLM-002: Get temperature for retry attempt.
 
-    Returns None if the model does not accept the requested temperature.
-    Returns 1.0 for kimi-k2.6, which requires an explicit temperature=1.
-    Otherwise returns increasing temperatures for retry variation. GPT-5
-    capability checks include the configured reasoning mode; None means the
-    request omits reasoning_effort rather than sending a literal "none".
+    Returns None if the model does not support temperature at all.
+    Returns 1.0 for models that only support temperature=1.
+    Otherwise returns increasing temperatures for retry variation.
     """
     # Moonshot kimi-k2.6 only allows temperature=1.
     if "kimi-k2.6" in model_name.lower():
         return 1.0
 
-    if not _supports_temperature(
-        model_name, base_temp, reasoning_effort=reasoning_effort
-    ):
+    if not _supports_temperature(model_name, base_temp):
         return None
 
     temperatures = [base_temp, 0.3, 0.5, 0.7]
@@ -1367,46 +1113,6 @@ def _strip_thinking_tags(content: str) -> str:
     return stripped.strip()
 
 
-def _object_starts_inside_array(content: str, object_start: int) -> bool:
-    """Return whether the prefix is valid JSON array grammar around the object."""
-    array_starts: list[int] = []
-    in_string = False
-    escaped = False
-    for index, char in enumerate(content[:object_start]):
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-        elif char == '"':
-            in_string = True
-        elif char == "[":
-            array_starts.append(index)
-        elif char == "]" and array_starts:
-            array_starts.pop()
-    if not array_starts:
-        return False
-
-    candidate = (
-        content[array_starts[0] : object_start]
-        + "{}"
-        + "]" * len(array_starts)
-    )
-    try:
-        value, end = json.JSONDecoder().raw_decode(candidate)
-    except RecursionError:
-        # Treat prefixes too deeply nested for the decoder as unreadable arrays
-        # instead of salvaging an object from inside them.
-        return True
-    except json.JSONDecodeError:
-        # An object-like fragment inside an unclosed array string is not a
-        # trustworthy recovery point. Plain bracketed prose remains salvageable.
-        return in_string
-    return isinstance(value, list) and not candidate[end:].strip()
-
-
 def _extract_json(content: str, _depth: int = 0) -> str:
     """Extract JSON from LLM response, handling various formats.
 
@@ -1440,9 +1146,6 @@ def _extract_json(content: str, _depth: int = 0) -> str:
                 content = content[4:]
 
     content = content.strip()
-
-    if content.startswith("["):
-        raise ValueError("Expected a JSON object, received a top-level array")
 
     # If content starts with {, find the matching }
     if content.startswith("{"):
@@ -1483,24 +1186,16 @@ def _extract_json(content: str, _depth: int = 0) -> str:
 
     # Try to find JSON object in the content (only if not already at start)
     start_idx = content.find("{")
-    if start_idx < 0 and "[" in content:
-        raise ValueError("Expected a JSON object, received a top-level array")
-    if start_idx >= 0 and _object_starts_inside_array(content, start_idx):
-        raise ValueError("Expected a JSON object, received a top-level array")
     if start_idx > 0:
         # Only recurse if { is found after position 0 to avoid infinite recursion
         return _extract_json(content[start_idx:], _depth + 1)
 
     # LLM-007: Log unrecognized format for debugging
-    # Model output can include a user's full resume or job description.  Keep
-    # diagnostics useful without writing that personal content to server logs.
     logging.error(
-        "Could not extract JSON from response format (response length: %d)",
-        len(content) if content else 0,
+        "Could not extract JSON from response format. Content preview: %s",
+        content[:200] if content else "<empty>",
     )
-    # Do not include model output in the exception either: callers log this
-    # exception and model output can contain a user's resume or job details.
-    raise ValueError(f"No JSON found in response (response length: {len(original)})")
+    raise ValueError(f"No JSON found in response: {original[:200]}")
 
 
 async def complete_json(
@@ -1510,7 +1205,6 @@ async def complete_json(
     max_tokens: int = 4096,
     retries: int = 2,
     schema_type: str = "resume",
-    response_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Make a completion request expecting JSON response.
 
@@ -1522,10 +1216,7 @@ async def complete_json(
         schema_type: Expected schema — "resume", "enrichment", "diff",
             "keywords", or "interview_prep". Passed to _appears_truncated for
             context-aware truncation detection and used to tailor retry hints.
-        response_validator: Optional synchronous schema/source validator. A
-            ``ValueError`` rejects the content inside this retry budget.
     """
-    validate_prompt_size(prompt + (system_prompt or ""))
     router, config = get_router(config)
     model_name = get_model_name(config)
 
@@ -1538,10 +1229,8 @@ async def complete_json(
         {"role": "user", "content": prompt},
     ]
 
-    # Unknown compatible servers may reject response_format. Use JSON mode
-    # when LiteLLM advertises it or when the endpoint is explicitly known to
-    # support it; prompt-only JSON remains the portable default.
-    use_json_mode = _supports_json_mode(model_name) or _openai_compatible_supports_json_mode(config)
+    # Check if we can use JSON mode
+    use_json_mode = _supports_json_mode(model_name)
     json_mode_failed = False
 
     for attempt in range(retries + 1):
@@ -1550,14 +1239,10 @@ async def complete_json(
                 "model": "primary",
                 "messages": messages,
                 "max_tokens": max_tokens,
-                "timeout": remaining_timeout(
-                    _calculate_timeout("json", max_tokens, config.provider)
-                ),
+                "timeout": _calculate_timeout("json", max_tokens, config.provider),
             }
             # LLM-002: Increase temperature on retry for variation
-            retry_temp = _get_retry_temperature(
-                model_name, attempt, reasoning_effort=config.reasoning_effort
-            )
+            retry_temp = _get_retry_temperature(model_name, attempt)
             if retry_temp is not None:
                 kwargs["temperature"] = retry_temp
             reasoning_effort = config.reasoning_effort
@@ -1579,14 +1264,7 @@ async def complete_json(
                 and reasoning_effort in ("low", "medium", "high")
             ):
                 reasoning_effort = "minimal"
-            # HY3-Free on OpenCode Zen otherwise spends much of its output
-            # allocation in ``reasoning_content`` and truncates large resume
-            # JSON. LiteLLM filters unknown top-level parameters, so use its
-            # OpenAI-compatible ``extra_body`` passthrough for the HY3-native
-            # no_think setting. Scope it to structured-output requests only.
-            if _uses_opencode_zen_hy3(config):
-                kwargs["extra_body"] = {"reasoning_effort": "no_think"}
-            elif reasoning_effort:
+            if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
 
             # JSON-012: Fallback to prompt-only JSON mode after JSON-mode failure.
@@ -1596,35 +1274,20 @@ async def complete_json(
                 kwargs["response_format"] = {"type": "json_object"}
 
             response = await router.acompletion(**kwargs)
-            # Never parse ``reasoning_content`` as JSON.  If the model has
-            # consumed its budget on reasoning but produced no final answer,
-            # treat it as an empty completion and retry with the full budget.
-            content = _extract_choice_primary_text(response.choices[0])
+            content = _extract_choice_text(response.choices[0])
 
             if not content:
                 raise ValueError("Empty response from LLM")
 
-            # Do not log response bodies: they frequently contain a resume or
-            # a job description and are therefore user-provided personal data.
             logging.debug(
-                "Received LLM JSON response (attempt %d, length: %d)",
-                attempt + 1,
-                len(content),
-            )
+                f"LLM response (attempt {attempt + 1}): {content[:300]}")
 
             # Extract and parse JSON
             json_str = _extract_json(content)
             result = json.loads(json_str)
 
-            if not isinstance(result, dict):
-                raise ValueError("Expected a JSON object")
-            if response_validator is not None:
-                result = response_validator(result)
-                if not isinstance(result, dict):
-                    raise ValueError("Response validator must return a JSON object")
-
             # LLM-001: Check if parsed result appears truncated
-            if _appears_truncated(result, schema_type):
+            if isinstance(result, dict) and _appears_truncated(result, schema_type):
                 if attempt < retries:
                     logging.warning(
                         "Parsed JSON appears truncated (attempt %d/%d), retrying",
@@ -1679,10 +1342,6 @@ async def complete_json(
             # Content quality — empty response, JSON extraction failure
             logging.warning(f"Content extraction failed (attempt {attempt + 1}): {e}")
             if attempt < retries:
-                messages[-1]["content"] = (
-                    prompt
-                    + "\n\nIMPORTANT: Output ONLY a valid JSON object that satisfies every requested field and type."
-                )
                 continue
             raise
 

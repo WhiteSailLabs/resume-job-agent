@@ -1,282 +1,67 @@
-<div align="center">
+# Resume Job Agent｜求职简历 Agent
 
-[![Resume Matcher](assets/header.png)](https://www.resumematcher.fyi)
+[English](README.md) · [安装说明](SETUP.zh-CN.md) · [安全说明](.github/SECURITY.md)
 
-# Resume Matcher
+Resume Job Agent 是一个本地优先的求职工作流：一句话寻找岗位、审核完整 JD、根据主简历批量生成岗位定制简历，并在简历库中继续用 AI 微调和导出 PDF。
 
-[English](README.md) | [Español](README.es.md) | **简体中文** | [日本語](README.ja.md)
+项目以成熟开源项目 [Resume Matcher](https://github.com/srbhr/Resume-Matcher) 为产品基础，复用其简历数据、编辑、预览和 PDF 导出能力；国内岗位发现通过独立适配层接入 [jobfindsme](https://github.com/russeell/jobfindsme)，没有另造一套平行简历系统。
 
-[𝙹𝚘𝚒𝚗 𝙳𝚒𝚜𝚌𝚘𝚛𝚍](https://dsc.gg/resume-matcher) ✦ [𝚆𝚎𝚋𝚜𝚒𝚝𝚎](https://resumematcher.fyi) ✦ [𝙷𝚘𝚠 𝚝𝚘 𝙸𝚗𝚜𝚝𝚊𝚕𝚕](https://resumematcher.fyi/docs/installation) ✦ [𝙲𝚘𝚗𝚝𝚛𝚒𝚋𝚞𝚝𝚘𝚛𝚜](#contributors) ✦ [𝚂𝚙𝚘𝚗𝚜𝚘𝚛](#sponsors) ✦ [𝚃𝚠𝚒𝚝𝚝𝚎𝚛/𝚇](https://twitter.com/srbhrai) ✦ [𝙻𝚒𝚗𝚔𝚎𝚍𝙸𝚗](https://www.linkedin.com/company/resume-matcher/) ✦ [𝙲𝚛𝚎𝚊𝚝𝚘𝚛](https://srbhr.com)
+## 用户流程
 
-为每一次求职投递生成量身定制的简历：AI 给出可执行的优化建议。支持本地使用 Ollama 运行，也可通过 API 连接你常用的 LLM 提供商。
+1. 上传并管理多个原始简历，指定一份主简历。
+2. 用一句话描述目标岗位，或粘贴一个岗位详情链接。
+3. 查看岗位来源、地点和完整 JD，批量审核需要定制的岗位。
+4. 直接批量生成，每个岗位对应一份可恢复、可重试的定制简历。
+5. 查看 AI 的改写规划与质量检查，并通过对话继续微调。
+6. 用红蓝差异预览确认修改，再保存和导出 PDF。
 
-![Resume Matcher Demo](assets/Resume_Matcher_Demo_2.gif)
+## 当前岗位来源
 
-</div>
+| 来源 | 状态 | 说明 |
+| --- | --- | --- |
+| 岗位详情链接导入 | 稳定 | 推荐路径，一次导入一个明确链接。 |
+| BOSS 直聘检索 | 实验功能 | 使用可见、由用户授权的 Chrome，会受登录和安全验证影响。 |
+| 猎聘、智联、前程无忧 | 规划中 | 不返回伪造结果，未完成时会在界面如实显示。 |
 
-<br>
+项目不会绕过验证码、安全验证、登录和访问频率限制，也不会自动投递或给招聘者发消息。
 
-<div align="center">
+## 快速启动
 
-![Stars](https://img.shields.io/github/stars/srbhr/Resume-Matcher?labelColor=F0F0E8&style=for-the-badge&color=1d4ed8)
-![Apache 2.0](https://img.shields.io/github/license/srbhr/Resume-Matcher?labelColor=F0F0E8&style=for-the-badge&color=1d4ed8) ![Forks](https://img.shields.io/github/forks/srbhr/Resume-Matcher?labelColor=F0F0E8&style=for-the-badge&color=1d4ed8) ![version](https://img.shields.io/badge/Version-1.3%20Crescendolls%20-FFF?labelColor=F0F0E8&style=for-the-badge&color=1d4ed8)
-
-[![Discord](https://img.shields.io/discord/1122069176962531400?labelColor=F0F0E8&logo=discord&logoColor=1d4ed8&style=for-the-badge&color=1d4ed8)](https://dsc.gg/resume-matcher) [![Website](https://img.shields.io/badge/website-Resume%20Matcher-FFF?labelColor=F0F0E8&style=for-the-badge&color=1d4ed8)](https://resumematcher.fyi) [![LinkedIn](https://img.shields.io/badge/LinkedIn-Resume%20Matcher-FFF?labelColor=F0F0E8&logo=LinkedIn&style=for-the-badge&color=1d4ed8)](https://www.linkedin.com/company/resume-matcher/)
-
-<a href="https://trendshift.io/repositories/565" target="_blank"><img src="https://trendshift.io/api/badge/repositories/565" alt="srbhr%2FResume-Matcher | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-![Vercel OSS Program](https://vercel.com/oss/program-badge.svg)
-
-</div>
-
-> \[!IMPORTANT]
->
-> 本项目需要你的帮助与支持。如果你能捐赠一点点，就能帮助我持续开发和改进 Resume Matcher。
-
-<div align="center">
-
-[![Sponsor on GitHub](https://img.shields.io/github/sponsors/srbhr?style=for-the-badge&label=Sponsor&color=1d4ed8&labelColor=F0F0E8&logo=github&logoColor=black)](https://github.com/sponsors/srbhr) [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&color=1d4ed8&labelColor=F0F0E8&logoColor=black)](https://www.buymeacoffee.com/srbhr)
-
-**代表公司赞助？** 让你的 Logo 展示在 27k+ 开发者面前 → **[成为赞助商 ↓](#sponsors)**
-
-</div>
-
-## 快速开始
-
-Resume Matcher 的工作方式是先建立一份“主简历”，然后针对每个职位描述进行定制。安装说明见：[如何安装](#how-to-install)
-
-### 工作流程
-
-1. **上传**你的主简历（PDF 或 DOCX）
-2. **粘贴**你要投递的职位描述（JD）
-3. **审阅**AI 生成的改进建议与定制内容
-4. **生成**该岗位的求职信与邮件模板
-5. **自定义**版式与章节，匹配你的风格
-6. **导出**为你选定模板的专业 PDF
-
-### 保持联系
-
-[![Discord](assets/resume_matcher_discord.png)](https://dsc.gg/resume-matcher)
-
-加入我们的 [Discord](https://dsc.gg/resume-matcher)，参与讨论、功能需求与社区支持。
-
-[![LinkedIn](assets/resume_matcher_linkedin.png)](https://www.linkedin.com/company/resume-matcher/)
-
-关注我们的 [LinkedIn](https://www.linkedin.com/company/resume-matcher/) 获取更新。
-
-![Star Resume Matcher](assets/star_resume_matcher.png)
-
-给仓库点 Star 来支持开发，并及时获取新版本通知。
-
-<a id="sponsors"></a>
-
-## 赞助商
-
-![sponsors](assets/sponsors.png)
-
-Resume Matcher 是免费且开源的，依靠赞助商与支持者维持运转。如果它对你有帮助，欢迎支持它的开发。
-
-### 支持 Resume Matcher 的公司
-
-以公司档位赞助，**你的 Logo + 链接 + 简介将展示在这里** —— 面向 **27k+ Star、4.9k Fork** 的社区，并登上 [Trendshift](https://trendshift.io/repositories/565) 与 [Vercel OSS 计划](https://vercel.com/oss)。
-
-| Sponsor | Description |
-|---------|-------------|
-| [APIDECK](https://apideck.com?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) | One API to connect your app to 200+ SaaS platforms (accounting, HRIS, CRM, file storage). Build integrations once, not 50 times. 🌐 [apideck.com](https://apideck.com?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) |
-| [Vercel](https://vercel.com?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) | Resume Matcher 是 Vercel OSS // Summer 2025 计划的一部分 🌐 [vercel.com](https://vercel.com?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) |
-| [Cubic.dev](https://cubic.dev?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) | Cubic 为 Resume Matcher 提供 PR 审查 🌐 [cubic.dev](https://cubic.dev?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) |
-| [Kilo Code](https://kilo.ai?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) | Kilo Code 为 Resume Matcher 提供 AI 代码审查和编码积分 🌐 [kilo.ai](https://kilo.ai?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) |
-| [ZanReal](https://zanreal.com/?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) | ZanReal 是一家以 AI 驱动的开发公司，构建可扩展的云解决方案，从战略、UX 到 DevOps，帮助团队更快交付、把创意变为产品。 🌐 [zanreal.com](https://zanreal.com/?utm_source=resumematcher&utm_medium=github&utm_campaign=sponsors) |
-| **✦ 你的公司可展示于此** | 触达 27k+ 开发者与 4.9k Fork。**[成为赞助商 →](https://github.com/sponsors/srbhr)** |
-
-请阅读我们的 [Sponsorship Guide](https://resumematcher.fyi/docs/sponsoring) 了解您的赞助如何帮助本项目。您将在 ReadME 和我们的网站上获得特别鸣谢。
-
-<a id="support-the-development-by-donating"></a>
-
-### 以个人身份支持
-
-![donate](assets/supporting_resume_matcher.png)
-
-每一份支持都让 Resume Matcher 保持免费，并资助新功能的开发 —— 你也会在 ReadME 和我们的网站上获得鸣谢。
-
-| 平台  | 链接 |
-|------|------|
-| GitHub | [![GitHub Sponsors](https://img.shields.io/github/sponsors/srbhr?style=for-the-badge&color=1d4ed8&labelColor=F0F0E8&logo=github&logoColor=black)](https://github.com/sponsors/srbhr) |
-| Buy Me a Coffee | [![BuyMeACoffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&color=1d4ed8&labelColor=F0F0E8&logoColor=black)](https://www.buymeacoffee.com/srbhr) |
-
-## 创作者留言
-
-感谢您关注 Resume Matcher。如果您想联系、合作或只是打个招呼，请随时联系我！
-~ **Saurabh Rai** ✨
-
-您可以在以下平台关注我：
-
-- Website: [https://srbhr.com](https://srbhr.com)
-- Linkedin: [https://www.linkedin.com/in/srbhr/](https://www.linkedin.com/in/srbhr/)
-- Twitter: [https://twitter.com/srbhrai](https://twitter.com/srbhrai)
-- GitHub: [https://github.com/srbhr](https://github.com/srbhr)
-
-## 主要功能
-
-![resume_matcher_features](assets/features.png)
-
-### 核心能力
-
-**主简历（Master Resume）**：基于你现有简历创建一份完整的主简历，后续每次投递都从这份主简历中抽取与定制。
-
-![Job Description Input](assets/step_2_zh-CN.png)
-
-### 简历生成器
-
-![Resume Builder](assets/step_5_zh-CN.png)
-
-粘贴职位描述后，获得针对该岗位定制的 AI 简历建议。
-
-你可以：
-
-- 修改建议内容
-- 添加/移除章节
-- 通过拖拽调整章节顺序
-- 从多种简历模板中选择
-
-### 求职信与邮件生成器
-
-基于职位描述与你的简历，生成定制化的求职信与邮件模板。
-
-![Cover Letter](assets/cover_letter_zh-CN.png)
-
-### 简历评分（开发中功能）
-
-我们正在开发“简历评分”功能：对比你的简历与职位描述，输出匹配分数，并给出改进建议。
-
-![Resume Scoring and Keyword Highlight](assets/keyword_highlighter_zh-CN.png)
-
-### PDF 导出
-
-将定制后的简历与求职信导出为 PDF。
-
-### 模板
-
-| 模板名称 | 预览 | 说明 |
-|---------|------|------|
-| **经典单栏** | ![Classic Template](assets/pdf-templates/single-column.jpg) | 传统且干净的排版，适用于大多数行业。[查看 PDF](assets/pdf-templates/single-column.pdf) |
-| **现代单栏** | ![Modern Template](assets/pdf-templates/modern-single-column.jpg) | 更强调可读性与审美的现代风格。[查看 PDF](assets/pdf-templates/modern-single-column.pdf) |
-| **经典双栏** | ![Classic Two Column Template](assets/pdf-templates/two-column.jpg) | 将内容分区展示，更清晰易扫读。[查看 PDF](assets/pdf-templates/two-column.pdf) |
-| **现代双栏** | ![Modern Two Column Template](assets/pdf-templates/modern-two-column.jpg) | 利用双栏结构做更强的信息组织。[查看 PDF](assets/pdf-templates/modern-two-column.pdf) |
-
-### 国际化
-
-- **多语言 UI**：界面支持英语、西班牙语、中文与日语
-- **多语言内容**：可按你偏好的语言生成简历与求职信
-
-### 路线图
-
-如果你有建议或功能需求，欢迎在 GitHub 提 Issue，或加入我们的 [Discord](https://dsc.gg/resume-matcher) 讨论。
-
-- 可视化关键词高亮
-- 用于打造量化、可落地简历内容的 AI 画布（AI Canvas）
-- 多职位描述联合优化
-
-<a id="how-to-install"></a>
-
-## 如何安装
-
-![Installation](assets/how_to_install_resumematcher.png)
-
-更详细的安装与配置说明请查看 **[安装文档](SETUP.zh-CN.md)**（也提供 [English](SETUP.md) / [Español](SETUP.es.md) / [日本語](SETUP.ja.md)）。
-
-### 前置条件
-
-| 工具 | 版本 | 安装 |
-|------|------|------|
-| Python | 3.13+ | [python.org](https://python.org) |
-| Node.js | 22+ | [nodejs.org](https://nodejs.org) |
-| uv | 最新版 | [astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) |
-
-### 快速开始
-
-适用于 MacOS、WSL 与 Ubuntu 的最快方式：
+需要 Python 3.13+、Node.js 22+、`uv`、`pnpm`；PDF 导出还需要 Chrome/Chromium。
 
 ```bash
-# 克隆仓库
-git clone https://github.com/srbhr/Resume-Matcher.git
-cd Resume-Matcher
+git clone https://github.com/WhiteSailLabs/resume-job-agent.git
+cd resume-job-agent
+./scripts/start-local.sh
+```
 
-# 后端（终端 1）
+打开 <http://127.0.0.1:3000>，然后在“设置”中配置 LLM。API Key 会加密保存在本地数据目录，不会进入 Git。
+
+手动安装、Docker、ARK Agent Plan 与 BOSS 使用说明见 [SETUP.zh-CN.md](SETUP.zh-CN.md)。
+
+## 隐私边界
+
+- 简历、JD、生成文件和模型密钥默认只保存在本机。
+- 只有在用户选择模型并发起 AI 操作时，简历与 JD 才会发送到对应模型服务商。
+- BOSS 集成只读取专用或明确授权的 Chrome 可见页面，不导出密码和 Cookie。
+- 当前版本没有账号系统和多用户隔离，请勿直接暴露在公网。
+
+## 开发与测试
+
+```bash
+# 后端
 cd apps/backend
-cp .env.example .env        # 配置你的 AI 提供商
-uv sync                      # 安装依赖
-uv run app
+uv sync --extra dev
+uv run pytest
 
-# 前端（终端 2）
+# 前端
 cd apps/frontend
-npm install
-npm run dev
+pnpm install --frozen-lockfile
+pnpm test
+pnpm typecheck
+pnpm build
 ```
 
-打开 **<http://localhost:3000>**，并在 Settings 中配置你的 AI 提供商。
+## 开源来源
 
-### 支持的 AI 提供商
-
-| 提供商 | 本地/云 | 说明 |
-|--------|---------|------|
-| **Ollama** | 本地 | 免费，在你的机器上运行 |
-| **OpenAI** | 云 | GPT-4o、GPT-4o-mini |
-| **Anthropic** | 云 | Claude 3.5 Sonnet |
-| **Google Gemini** | 云 | Gemini 1.5 Flash/Pro |
-| **OpenRouter** | 云 | 访问多种模型 |
-| **DeepSeek** | 云 | DeepSeek Chat |
-
-### Docker 部署
-
-```bash
-docker pull srbhr/resume-matcher:latest
-
-docker run srbhr/resume-matcher:latest
-```
-
-<!-- 注意：Docker 文档正在编写中。目前请参考 docker-compose.yml -->
-
-> **在 Docker 中使用 Ollama？** 将 Ollama URL 配置为 `http://host.docker.internal:11434`（而不是 `localhost`）。
-
-### 技术栈
-
-| 组件 | 技术 |
-|------|------|
-| 后端 | FastAPI、Python 3.13+、LiteLLM |
-| 前端 | Next.js 15、React 19、TypeScript |
-| 数据库 | TinyDB（JSON 文件存储） |
-| 样式 | Tailwind CSS 4、Swiss International Style |
-| PDF | Playwright 驱动的无头 Chromium |
-
-## 参与贡献
-
-![how to contribute](assets/how_to_contribute.png)
-
-我们欢迎所有人的贡献！无论你是开发者、设计师，还是希望帮忙的用户。所有贡献者都会展示在我们官网的 [about 页面](https://resumematcher.fyi/about)，也会显示在 GitHub README 中。
-
-如果你希望参与未来规划的功能，可以先看看路线图。若你有建议或功能需求，欢迎在 GitHub 提 Issue，并在我们的 [Discord](https://dsc.gg/resume-matcher) 讨论。
-
-<a id="contributors"></a>
-
-## 贡献者
-
-![Contributors](assets/contributors.png)
-
-<a href="https://github.com/srbhr/Resume-Matcher/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=srbhr/Resume-Matcher" />
-</a>
-
-<br/>
-
-<details>
-  <summary><kbd>Star 历史</kbd></summary>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=srbhr/resume-matcher&theme=dark&type=Date">
-    <img width="100%" src="https://star-history.dera.page/svg?repos=srbhr/resume-matcher&theme=dark&type=Date">
-  </picture>
-</details>
-
-## Resume Matcher 是 [Vercel Open Source Program](https://vercel.com/oss) 的一部分
-
-![Vercel OSS Program](https://vercel.com/oss/program-badge.svg)
+本项目是 Resume Matcher 的 Apache-2.0 衍生项目。岗位发现通过固定版本的 MIT 协议 jobfindsme 依赖接入。具体归属和版本见 [NOTICE](NOTICE)。

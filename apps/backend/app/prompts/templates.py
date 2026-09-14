@@ -487,6 +487,7 @@ DIFF_STRATEGY_INSTRUCTIONS = {
     "nudge": "Make minimal edits. Only rephrase where there is a clear match. Do not add new bullet points.",
     "keywords": "Weave in relevant keywords where evidence already exists. You may rephrase bullets but do not add new ones.",
     "full": "Make targeted adjustments. You may rephrase bullets, add verified JD skills, and add new bullets that elaborate on existing work, but do not invent new responsibilities.",
+    "asu": "Rewrite the summary and the JD-relevant bullets as concise evidence statements. For every rewritten bullet, use the supported sequence: work context or ownership -> specific action and method -> outcome or verifiable evidence. Put the most JD-relevant, fact-supported bullets first. Do not turn responsibilities into claims, do not add a metric unless it exists in the source, and omit a component when the source does not prove it.",
 }
 
 SKILL_TARGET_PLAN_PROMPT = """Build a concise skill target plan for tailoring this resume to the job.
@@ -524,6 +525,44 @@ Output this exact JSON format:
   "strategy_notes": "brief notes for the next editing pass"
 }}"""
 
+TAILORING_PLAN_PROMPT = """You are the planning stage of a truthful resume-tailoring agent.
+Analyze the target job and the candidate's existing resume before any rewriting happens.
+Return ONLY JSON. Do not rewrite resume text in this stage.
+
+Rules:
+1. Rank the job's 3-6 most important requirements.
+2. Every proposed emphasis must cite one or more exact resume JSON paths that contain supporting evidence.
+3. If the resume does not prove a requirement, put it in gaps; never propose inventing it.
+4. Decide which supported evidence should be emphasized, reordered, lightly reframed, or left unchanged.
+5. Never plan changes to identity, employers, titles, dates, institutions, or degrees.
+6. Write reasons and notes in {output_language}.
+
+JD analysis:
+{job_keywords}
+
+Job Description:
+{job_description}
+
+Resume JSON:
+{original_resume}
+
+Output exactly:
+{{
+  "target_role": "concise target role",
+  "priorities": [
+    {{
+      "requirement": "important JD requirement",
+      "importance": "must_have or preferred",
+      "evidence_paths": ["workExperience[0].description[1]"],
+      "action": "emphasize, reorder, reframe, or keep",
+      "reason": "why this evidence supports the requirement"
+    }}
+  ],
+  "gaps": ["requirements not proven by the resume"],
+  "protected_facts": ["facts that must not change"],
+  "strategy_notes": "short execution strategy"
+}}"""
+
 DIFF_IMPROVE_PROMPT = """Given this resume and job description, output a JSON object with targeted changes to better align the resume with the job.
 
 RULES:
@@ -539,6 +578,13 @@ RULES:
 10. Exception to rule 2: you may add a skill only if it appears in the verified skill targets below
 11. By DEFAULT, scan the summary and every work, project, and education description for content that already demonstrates a job-description keyword or skill, and reframe that text using the job description's terminology where it is not already phrased that way (per rule 9, leave content that already aligns well), while preserving the candidate's actual accomplishment. Do NOT add new work, metrics, or responsibilities; only restate existing content in the JD's language, and verify every reframe stays factually accurate.
 12. Preserve original capitalization, especially for proper nouns, technical terms (e.g., REST, API, AWS), and acronyms. Do not change the casing of words that were capitalized in the original.
+13. Organize each edited bullet as: candidate action -> system/product capability -> business or user value -> verifiable evidence -> clear personal boundary. Omit any component that the source does not support instead of inventing it.
+14. Prefer concrete actions and evidence over generic self-evaluation. Avoid empty phrases such as "responsible for", "familiar with", "strong ability", "passionate about", "results-driven", or their Chinese equivalents when a supported action can be stated.
+15. Use strong ownership words (Owner, led, spearheaded, architected, 0-to-1, 主导, 负责人, 架构, 核心作者) only when the original text itself proves decision authority, delivery ownership, a shipped result, or an attributable contribution.
+16. Project-wide traffic, users, stars, funding, or team outcomes must not be rewritten as the candidate's individual achievement. Preserve the boundary between team result and personal contribution.
+17. Put the most relevant supported evidence first. The summary should state target identity and the strongest supported evidence, not a long list of adjectives or JD keywords.
+18. For the "asu" strategy, write in a compact, recruiter-readable evidence style: one complete sentence per bullet, no generic opening such as "responsible for" or "familiar with". A good bullet makes clear what the candidate personally did, on what product/system or problem, how it was done, and what evidence or result is supported. Do not force all four elements when the source lacks one.
+19. Do not translate a Chinese resume into English or mix languages. When output_language is Chinese, keep every newly written summary and bullet in natural Chinese while preserving original technical terms and proper nouns.
 
 PATHS you can target:
 - "summary" — the resume summary text
@@ -559,6 +605,12 @@ Keywords to emphasize (only if already supported by resume content):
 
 Verified skill targets:
 {skill_targets}
+
+Verified tailoring plan (follow it; do not address listed gaps by invention):
+{tailoring_plan}
+
+User adjustment request:
+{user_instruction}
 
 Job Description:
 {job_description}

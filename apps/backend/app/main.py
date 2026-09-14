@@ -3,11 +3,9 @@
 import asyncio
 import logging
 import sys
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 # Fix for Windows: Use ProactorEventLoop for subprocess support (Playwright)
 if sys.platform == "win32":
@@ -17,9 +15,8 @@ logger = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.ai_budget import operation_error_content
 from app.config import settings
-from app.database import DatabaseBusyError, db
+from app.database import db
 from app.pdf import close_pdf_renderer, init_pdf_renderer
 from app.routers import (
     applications_router,
@@ -30,7 +27,6 @@ from app.routers import (
     resume_wizard_router,
     resumes_router,
 )
-from app.routers.resumes import drain_processing_cleanup_tasks
 
 
 def _configure_application_logging() -> None:
@@ -43,7 +39,7 @@ _configure_application_logging()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -59,15 +55,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.config import migrate_legacy_keys
 
     migrate_legacy_keys()
+    # BackgroundTasks cannot survive a process restart. Resume only durable
+    # batch tasks; completed job ids are already persisted by the worker.
+    from app.services.generation_tasks import run_generation_task
+
+    for task in await db.list_recoverable_generation_tasks():
+        asyncio.create_task(run_generation_task(task["task_id"]))
     # PDF renderer uses lazy initialization - will initialize on first use
     # await init_pdf_renderer()
     yield
     # Shutdown - wrap each cleanup in try-except to ensure all resources are released
-    try:
-        await drain_processing_cleanup_tasks()
-    except Exception:
-        logger.exception("Error draining processing cleanup")
-
     try:
         await close_pdf_renderer()
     except Exception as e:
@@ -80,21 +77,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Resume Matcher API",
-    description="AI-powered resume tailoring for job descriptions",
+    title="Resume Job Agent API",
+    description="Local-first job discovery and evidence-grounded resume tailoring",
     version=__version__,
     lifespan=lifespan,
 )
-
-@app.exception_handler(DatabaseBusyError)
-async def database_busy_handler(request: Request, error: DatabaseBusyError) -> JSONResponse:
-    logger.warning("Database write contention for %s", request.url.path, exc_info=error)
-    return JSONResponse(
-        status_code=503,
-        content=operation_error_content(request, "Database is busy. Please retry shortly."),
-        headers={"Retry-After": "1"},
-    )
-
 
 # CORS middleware - origins configurable via CORS_ORIGINS env var
 app.add_middleware(
@@ -119,7 +106,7 @@ app.include_router(resume_wizard_router, prefix="/api/v1")
 async def root():
     """Root endpoint."""
     return {
-        "name": "Resume Matcher API",
+        "name": "Resume Job Agent API",
         "version": __version__,
         "docs": "/docs",
     }

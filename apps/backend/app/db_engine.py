@@ -67,13 +67,23 @@ def init_models_sync(engine: Engine) -> None:
     # migration idempotent so older local databases can load resumes safely.
     with engine.begin() as conn:
         columns = conn.exec_driver_sql("PRAGMA table_info(resumes)").mappings().all()
-        existing_columns = {column["name"] for column in columns}
-        if columns and "interview_prep" not in existing_columns:
+        if columns and "interview_prep" not in {column["name"] for column in columns}:
             conn.exec_driver_sql("ALTER TABLE resumes ADD COLUMN interview_prep TEXT")
-        if columns and "processing_token" not in existing_columns:
-            conn.exec_driver_sql("ALTER TABLE resumes ADD COLUMN processing_token TEXT")
-
-        preview_columns = conn.exec_driver_sql("PRAGMA table_info(tailoring_previews)").mappings().all()
-        if preview_columns and "improvements" not in {column["name"] for column in preview_columns}:
-            conn.exec_driver_sql("ALTER TABLE tailoring_previews ADD COLUMN improvements JSON")
-        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_preview_compatibility ON tailoring_previews (source_id, job_id, payload_hash, created_at)")
+        if columns and "render_profile" not in {column["name"] for column in columns}:
+            conn.exec_driver_sql("ALTER TABLE resumes ADD COLUMN render_profile JSON")
+        improvement_columns = conn.exec_driver_sql("PRAGMA table_info(improvements)").mappings().all()
+        improvement_column_names = {column["name"] for column in improvement_columns}
+        if improvement_columns and "tailoring_plan" not in improvement_column_names:
+            conn.exec_driver_sql("ALTER TABLE improvements ADD COLUMN tailoring_plan JSON")
+        if improvement_columns and "quality_audit" not in improvement_column_names:
+            conn.exec_driver_sql("ALTER TABLE improvements ADD COLUMN quality_audit JSON")
+        task_columns = conn.exec_driver_sql("PRAGMA table_info(generation_tasks)").mappings().all()
+        if task_columns and "generated_resume_ids" not in {column["name"] for column in task_columns}:
+            conn.exec_driver_sql("ALTER TABLE generation_tasks ADD COLUMN generated_resume_ids JSON")
+        task_column_names = {column["name"] for column in task_columns}
+        if task_columns and "current_stage" not in task_column_names:
+            conn.exec_driver_sql("ALTER TABLE generation_tasks ADD COLUMN current_stage VARCHAR")
+        if task_columns and "current_job_id" not in task_column_names:
+            conn.exec_driver_sql("ALTER TABLE generation_tasks ADD COLUMN current_job_id VARCHAR")
+        if task_columns and "stage_detail" not in task_column_names:
+            conn.exec_driver_sql("ALTER TABLE generation_tasks ADD COLUMN stage_detail VARCHAR")

@@ -41,17 +41,8 @@ export interface EnhancedDescription {
   enhanced_description: string[];
 }
 
-export interface EnhancementItemError {
-  item_id: string;
-  item_type: 'experience' | 'project';
-  title: string;
-  subtitle?: string | null;
-  message: string;
-}
-
 export interface EnhancementPreview {
   enhancements: EnhancedDescription[];
-  errors?: EnhancementItemError[];
 }
 
 /**

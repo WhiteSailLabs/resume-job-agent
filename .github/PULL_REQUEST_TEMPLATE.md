@@ -6,7 +6,6 @@
 
 ## Description
 <!-- Describe the changes made in this pull request. What problem does it solve or what feature does it add/modify? -->
-copilot:summary
 
 ## Type
 <!-- Check the relevant options by putting an "x" in the brackets -->
@@ -47,4 +46,3 @@ copilot:summary
 
 ## Additional Information
 <!-- Add any other information about the pull request that you think might be helpful -->
-copilot:walkthrough

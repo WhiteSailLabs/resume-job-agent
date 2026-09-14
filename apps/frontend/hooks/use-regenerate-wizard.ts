@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { useOperationOwner } from './use-operation-owner';
+import { useState, useCallback } from 'react';
 import { regenerateItems as regenerateItemsApi, applyRegeneratedItems } from '@/lib/api/enrichment';
 import type {
   RegenerateItemError,
@@ -15,7 +14,6 @@ import { useTranslations } from '@/lib/i18n';
 interface UseRegenerateWizardProps {
   resumeId: string;
   outputLanguage?: string;
-  /** Refresh the acknowledged resume; reject if refresh fails so Retry can fetch again. */
   onSuccess?: () => void | Promise<void>;
   onError?: (error: string) => void;
 }
@@ -40,7 +38,6 @@ interface UseRegenerateWizardReturn {
   // Loading states
   isGenerating: boolean;
   isApplying: boolean;
-  needsRefresh: boolean;
 
   // Error state
   error: string | null;
@@ -66,10 +63,6 @@ export function useRegenerateWizard({
   onError,
 }: UseRegenerateWizardProps): UseRegenerateWizardReturn {
   const { t } = useTranslations();
-  const { begin, isCurrent, invalidate } = useOperationOwner(resumeId);
-  const applied = useRef(false);
-  const applying = useRef(false);
-  const [needsRefresh, setNeedsRefresh] = useState(false);
 
   // Step state
   const [step, setStep] = useState<RegenerateWizardStep>('idle');
@@ -100,10 +93,6 @@ export function useRegenerateWizard({
 
   // Generate new content using AI
   const generate = useCallback(async () => {
-    const token = begin();
-    if (token === null) return;
-    applied.current = false;
-    setNeedsRefresh(false);
     if (selectedItems.length === 0) {
       setError('No items selected');
       return;
@@ -122,27 +111,21 @@ export function useRegenerateWizard({
       };
 
       const response = await regenerateItemsApi(request);
-      if (!isCurrent(token)) return;
       setRegeneratedItems(response.regenerated_items);
       setRegenerateErrors(response.errors ?? []);
       setStep('previewing');
     } catch (err) {
-      if (!isCurrent(token)) return;
       const errorMessage = err instanceof Error ? err.message : 'Failed to generate content';
       setError(errorMessage);
       setStep('instructing'); // Go back to instruction step on error
       onError?.(errorMessage);
     } finally {
-      if (isCurrent(token)) setIsGenerating(false);
+      setIsGenerating(false);
     }
-  }, [resumeId, selectedItems, instruction, outputLanguage, onError, t, begin, isCurrent]);
+  }, [resumeId, selectedItems, instruction, outputLanguage, onError, t]);
 
   // Reset all state
   const reset = useCallback(() => {
-    invalidate();
-    applied.current = false;
-    applying.current = false;
-    setNeedsRefresh(false);
     setStep('idle');
     setSelectedItems([]);
     setInstruction('');
@@ -151,59 +134,44 @@ export function useRegenerateWizard({
     setError(null);
     setIsGenerating(false);
     setIsApplying(false);
-  }, [invalidate]);
-
-  useEffect(() => reset(), [resumeId, reset]);
+  }, []);
 
   // Accept and apply the changes
   const acceptChanges = useCallback(async () => {
-    if (applying.current) return;
     if (regeneratedItems.length === 0) {
       setError('No changes to apply');
       return;
     }
-    const token = begin();
-    if (token === null) return;
-    applying.current = true;
+
     setIsApplying(true);
     setError(null);
 
     try {
-      if (!applied.current) {
-        await applyRegeneratedItems(resumeId, regeneratedItems);
-        if (!isCurrent(token)) return;
-        applied.current = true;
-        setNeedsRefresh(true);
+      await applyRegeneratedItems(resumeId, regeneratedItems);
+      if (onSuccess) {
+        await onSuccess();
       }
-      await onSuccess?.();
-      if (!isCurrent(token)) return;
+
+      setStep('complete');
+      // Let the UI flush before closing the wizard.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       reset();
     } catch (err) {
-      if (!isCurrent(token)) return;
-      const errorMessage = applied.current
-        ? t('builder.regenerate.errors.refreshFailed')
-        : err instanceof Error
-          ? err.message
-          : 'Failed to apply changes';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to apply changes';
       setError(errorMessage);
       onError?.(errorMessage);
     } finally {
-      if (isCurrent(token)) {
-        applying.current = false;
-        setIsApplying(false);
-      }
+      setIsApplying(false);
     }
-  }, [resumeId, regeneratedItems, onSuccess, onError, reset, begin, isCurrent, t]);
+  }, [resumeId, regeneratedItems, onSuccess, onError, reset]);
 
   // Reject changes and go back to instruction step
   const rejectAndRegenerate = useCallback(() => {
-    if (applied.current) return;
-    invalidate();
     setRegeneratedItems([]);
     setRegenerateErrors([]);
     setError(null);
     setStep('instructing');
-  }, [invalidate]);
+  }, []);
 
   return {
     step,
@@ -216,7 +184,6 @@ export function useRegenerateWizard({
     regenerateErrors,
     isGenerating,
     isApplying,
-    needsRefresh,
     error,
     startRegenerate,
     generate,

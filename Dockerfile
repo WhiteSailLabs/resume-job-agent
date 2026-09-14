@@ -1,4 +1,4 @@
-# Resume Matcher Docker Image
+# Resume Job Agent Docker Image
 # Multi-stage build for optimized image size
 
 # ============================================
@@ -15,16 +15,18 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 WORKDIR /app/frontend
 
 # Copy package files first for better caching
-COPY apps/frontend/package*.json ./
+RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
+
+COPY apps/frontend/package.json apps/frontend/pnpm-lock.yaml apps/frontend/pnpm-workspace.yaml ./
 
 # Install dependencies
-RUN npm ci
+RUN pnpm install --frozen-lockfile
 
 # Copy frontend source
 COPY apps/frontend/ ./
 
 # Build the frontend
-RUN npm run build
+RUN pnpm build
 
 # ============================================
 # Stage 2: Final Image

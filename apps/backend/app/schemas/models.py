@@ -7,10 +7,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.ai_limits import validate_source_size
-from app.schemas.refinement import RefinementStats
-
-
 _TEXT_VALUE_KEYS = (
     "text",
     "summary",
@@ -427,6 +423,32 @@ class ResumeData(BaseModel):
         return _coerce_text(value)
 
 
+class ResumeRenderProfile(BaseModel):
+    """Persisted renderer choice; changing it never changes resume content."""
+
+    engine: Literal["react", "rendercv"] = "rendercv"
+    template: Literal[
+        "swiss-single",
+        "swiss-two-column",
+        "modern",
+        "modern-two-column",
+        "latex",
+        "clean",
+        "vivid",
+        "rendercv-engineering",
+        "rendercv-classic",
+        "rendercv-modern",
+        "rendercv-asu",
+    ] = "rendercv-engineering"
+
+    @model_validator(mode="after")
+    def _engine_matches_template(self) -> "ResumeRenderProfile":
+        is_rendercv = self.template.startswith("rendercv-")
+        if is_rendercv != (self.engine == "rendercv"):
+            raise ValueError("Renderer engine does not match template")
+        return self
+
+
 # API Response Models
 class ResumeUploadResponse(BaseModel):
     """Response for resume upload."""
@@ -435,6 +457,7 @@ class ResumeUploadResponse(BaseModel):
     request_id: str
     resume_id: str
     processing_status: Literal["pending", "processing", "ready", "failed"] = "pending"
+    processing_error: Literal["llm_not_configured", "model_not_enabled", "model_rate_limited", "parse_failed"] | None = None
     is_master: bool = False
 
 
@@ -485,6 +508,7 @@ class ResumeFetchData(BaseModel):
     interview_prep: InterviewPrepData | None = None
     parent_id: str | None = None  # For determining if resume is tailored
     title: str | None = None
+    render_profile: ResumeRenderProfile = Field(default_factory=ResumeRenderProfile)
 
 
 class ResumeFetchResponse(BaseModel):
@@ -505,6 +529,10 @@ class ResumeSummary(BaseModel):
     created_at: str
     updated_at: str
     title: str | None = None
+    render_profile: ResumeRenderProfile = Field(default_factory=ResumeRenderProfile)
+    job_id: str | None = None
+    company: str | None = None
+    job_title: str | None = None
 
 
 class ResumeListResponse(BaseModel):
@@ -530,6 +558,96 @@ class JobUploadResponse(BaseModel):
     request: dict[str, Any]
 
 
+class DiscoveryJobStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    IGNORED = "ignored"
+    GENERATED = "generated"
+
+
+class DiscoveryJobCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    company: str = Field(min_length=1, max_length=200)
+    location: str = Field(min_length=1, max_length=120)
+    source: str = Field(min_length=1, max_length=80)
+    original_url: str | None = None
+    jd: str = Field(min_length=1)
+    has_full_jd: bool = False
+    resume_id: str | None = None
+
+
+class DiscoveryJobStatusUpdate(BaseModel):
+    status: DiscoveryJobStatus
+
+
+class GenerationTaskCreate(BaseModel):
+    resume_id: str
+    job_ids: list[str] = Field(min_length=1, max_length=50)
+    # A batch remembers its output style on the saved job records, so a local
+    # restart cannot silently revert completed resumes to a different style.
+    render_profile: ResumeRenderProfile | None = None
+
+
+class DiscoverySearchRequest(BaseModel):
+    query: str = Field(min_length=2, max_length=500)
+    resume_id: str | None = None
+    allow_boss_browser: bool = False
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class DiscoveryLinkImportRequest(BaseModel):
+    """One user-pasted public job link, imported into the same review queue."""
+
+    url: str = Field(min_length=10, max_length=2048)
+    resume_id: str | None = None
+
+
+class DiscoveryDetailCompletionRequest(BaseModel):
+    """Ask the backend to retrieve detail pages for reviewed job cards."""
+
+    resume_id: str
+    job_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class BrowserAuthorizationCompleteRequest(BaseModel):
+    """A Chrome bridge confirms a user-clicked authorization on a source tab."""
+
+    source: Literal["boss", "liepin", "zhilian", "51job"]
+    page_url: str = Field(min_length=10, max_length=2048)
+    logged_in: bool = False
+
+
+class BrowserJobCaptureRequest(BaseModel):
+    """One explicitly user-requested visible job detail captured by Chrome."""
+
+    source: Literal["boss"]
+    page_url: str = Field(min_length=10, max_length=2048)
+    title: str = Field(min_length=1, max_length=200)
+    company: str = Field(min_length=1, max_length=200)
+    location: str = Field(min_length=1, max_length=120)
+    jd: str = Field(min_length=120, max_length=30000)
+    resume_id: str | None = None
+
+
+class BrowserJobListCaptureRequest(BaseModel):
+    """One visible search-result card captured by the authorized Chrome bridge."""
+
+    source: Literal["boss"]
+    page_url: str = Field(min_length=10, max_length=2048)
+    original_url: str = Field(min_length=10, max_length=2048)
+    title: str = Field(min_length=1, max_length=200)
+    company: str = Field(min_length=1, max_length=200)
+    location: str = Field(min_length=1, max_length=120)
+    summary: str = Field(default="职位列表摘要", min_length=1, max_length=2000)
+    resume_id: str | None = None
+
+
+class GenerationTaskRetryRequest(BaseModel):
+    """Retry all failed jobs, or a user-selected subset."""
+
+    job_ids: list[str] | None = Field(default=None, max_length=50)
+
+
 # Improvement Models
 class ImproveResumeRequest(BaseModel):
     """Request to improve/tailor a resume."""
@@ -537,6 +655,25 @@ class ImproveResumeRequest(BaseModel):
     resume_id: str
     job_id: str
     prompt_id: str | None = None
+    # Batch tailoring prioritizes a reliable first draft.  It keeps the two
+    # essential LLM steps (JD analysis + targeted rewrite) but skips the
+    # optional, expensive refinement pass that users can invoke later while
+    # editing the generated resume.
+    batch_mode: bool = False
+
+
+class ResumeAiAdjustRequest(BaseModel):
+    """A user's natural-language request to refine one tailored resume."""
+
+    instruction: str = Field(min_length=2, max_length=1200)
+
+
+class ResumeAiAdjustResponse(BaseModel):
+    """Preview returned to the chat UI before the user applies changes."""
+
+    reply: str
+    changed_paths: list[str] = Field(default_factory=list)
+    proposed_resume: ResumeData
 
 
 class ImprovementSuggestion(BaseModel):
@@ -619,12 +756,34 @@ class ATSScore(BaseModel):
     )
 
 
+class RefinementStats(BaseModel):
+    """Statistics from the multi-pass refinement process."""
+
+    passes_completed: int = Field(default=0, ge=0, description="Number of passes run")
+    keywords_injected: int = Field(
+        default=0, ge=0, description="Number of keywords injected"
+    )
+    ai_phrases_removed: list[str] = Field(
+        default_factory=list, description="List of AI phrases that were removed"
+    )
+    alignment_violations_fixed: int = Field(
+        default=0, ge=0, description="Number of alignment violations corrected"
+    )
+    initial_match_percentage: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Keyword match before refinement",
+    )
+    final_match_percentage: float = Field(
+        default=0.0, ge=0.0, le=100.0, description="Keyword match after refinement"
+    )
+
+
 class ImproveResumeData(BaseModel):
     """Data payload for improve response."""
 
     request_id: str
-    preview_id: str | None = None
-    preview_expires_at: str | None = None
     resume_id: str | None = Field(
         default=None,
         description="Null for preview responses; populated when the tailored resume is persisted.",
@@ -641,6 +800,11 @@ class ImproveResumeData(BaseModel):
     # Diff metadata
     diff_summary: ResumeDiffSummary | None = None
     detailed_changes: list[ResumeFieldDiff] | None = None
+
+    # Agent transparency: analysis/plan is produced before writing and the
+    # audit is computed after safety gates apply the proposed changes.
+    tailoring_plan: dict[str, Any] | None = None
+    quality_audit: dict[str, Any] | None = None
 
     # Refinement metadata (multi-pass refinement stats)
     refinement_stats: "RefinementStats | None" = None
@@ -666,17 +830,10 @@ class ImproveResumeConfirmRequest(BaseModel):
 
     resume_id: str
     job_id: str
-    preview_id: str | None = None
     improved_data: ResumeData
     improvements: list[ImprovementSuggestion]
-
-    @model_validator(mode="after")
-    def _validate_source_budget(self) -> "ImproveResumeConfirmRequest":
-        # A preview-sized resume remains confirmable when suggestions/IDs are
-        # added to its envelope. Each independently bounded source stays capped.
-        validate_source_size(self.improved_data.model_dump(mode="json"))
-        validate_source_size(self.model_dump(mode="json", exclude={"improved_data"}))
-        return self
+    tailoring_plan: dict[str, Any] | None = None
+    quality_audit: dict[str, Any] | None = None
 
 
 # Config Models
