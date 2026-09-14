@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import Resume, { ResumeData } from '@/components/dashboard/resume-component';
@@ -54,6 +54,7 @@ export default function ResumeViewerPage() {
   const { t } = useTranslations();
   const { uiLanguage } = useLanguage();
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const { decrementResumes, setHasMasterResume } = useStatusCache();
   const [resumeData, setResumeData] = useState<ResumeData | null>(null);
@@ -83,8 +84,13 @@ export default function ResumeViewerPage() {
   const [previewRevision, setPreviewRevision] = useState(0);
   const [jobContext, setJobContext] = useState<JobContext | null>(null);
   const [jobContextError, setJobContextError] = useState(false);
+  const [showSavedChanges, setShowSavedChanges] = useState(false);
+  const [baseResumeData, setBaseResumeData] = useState<ResumeData | null>(null);
+  const [savedChangesLoading, setSavedChangesLoading] = useState(false);
+  const [savedChangesError, setSavedChangesError] = useState<string | null>(null);
 
   const resumeId = params?.id as string;
+  const requestedChangesView = searchParams.get('view') === 'changes';
 
   const localizedResumeData = useMemo(() => {
     if (!resumeData) return null;
@@ -108,9 +114,7 @@ export default function ResumeViewerPage() {
         setResumeTitle(data.title ?? null);
         setIsTailoredResume(Boolean(data.parent_id));
         setParentResumeId(data.parent_id ?? null);
-        setRenderProfile(
-          data.render_profile ?? DEFAULT_RENDER_PROFILE
-        );
+        setRenderProfile(data.render_profile ?? DEFAULT_RENDER_PROFILE);
 
         if (data.parent_id) {
           fetchJobDescription(resumeId)
@@ -169,6 +173,20 @@ export default function ResumeViewerPage() {
     setIsMasterResume(localStorage.getItem('master_resume_id') === resumeId);
   }, [resumeId, t]);
 
+  useEffect(() => {
+    if (!requestedChangesView || !isTailoredResume || !parentResumeId || baseResumeData) return;
+    setShowSavedChanges(true);
+    setSavedChangesLoading(true);
+    setSavedChangesError(null);
+    fetchResume(parentResumeId)
+      .then((data) => {
+        if (!data.processed_resume) throw new Error('Base resume is not ready');
+        setBaseResumeData(data.processed_resume as ResumeData);
+      })
+      .catch(() => setSavedChangesError('原始简历暂时无法读取，请稍后重试。'))
+      .finally(() => setSavedChangesLoading(false));
+  }, [baseResumeData, isTailoredResume, parentResumeId, requestedChangesView]);
+
   const handleRetryProcessing = async () => {
     if (!resumeId) return;
     setIsRetrying(true);
@@ -194,6 +212,26 @@ export default function ResumeViewerPage() {
 
   const handleInterviewPrep = () => {
     router.push(`/builder?id=${resumeId}&tab=interview-prep`);
+  };
+
+  const handleToggleSavedChanges = async () => {
+    if (showSavedChanges) {
+      setShowSavedChanges(false);
+      return;
+    }
+    setShowSavedChanges(true);
+    if (baseResumeData || !parentResumeId) return;
+    setSavedChangesLoading(true);
+    setSavedChangesError(null);
+    try {
+      const data = await fetchResume(parentResumeId);
+      if (!data.processed_resume) throw new Error('Base resume is not ready');
+      setBaseResumeData(data.processed_resume as ResumeData);
+    } catch {
+      setSavedChangesError('原始简历暂时无法读取，请稍后重试。');
+    } finally {
+      setSavedChangesLoading(false);
+    }
   };
 
   const handleTitleSave = async () => {
@@ -346,9 +384,7 @@ export default function ResumeViewerPage() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background">
         <Loader2 className="w-10 h-10 animate-spin text-blue-700 mb-4" />
-        <p className="font-mono text-sm font-bold uppercase text-blue-700">
-          正在加载简历…
-        </p>
+        <p className="font-mono text-sm font-bold uppercase text-blue-700">正在加载简历…</p>
       </div>
     );
   }
@@ -419,7 +455,10 @@ export default function ResumeViewerPage() {
       <div className="mx-auto max-w-[108rem]">
         {/* Header Actions */}
         <div className="mb-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 no-print">
-          <Button variant="outline" onClick={() => router.push(isTailoredResume ? '/jobs' : '/resumes')}>
+          <Button
+            variant="outline"
+            onClick={() => router.push(isTailoredResume ? '/jobs' : '/resumes')}
+          >
             <ArrowLeft className="w-4 h-4" />
             {isTailoredResume ? '返回岗位列表' : '返回简历库'}
           </Button>
@@ -435,6 +474,12 @@ export default function ResumeViewerPage() {
               <Edit className="w-4 h-4" />
               编辑内容
             </Button>
+            {isTailoredResume && parentResumeId && (
+              <Button variant="outline" onClick={handleToggleSavedChanges}>
+                <Columns2 className="h-4 w-4" />
+                {showSavedChanges ? '收起改动' : '查看改动'}
+              </Button>
+            )}
             <Button variant="success" onClick={handleDownload} disabled={isDownloading}>
               <Download className="w-4 h-4" />
               {isDownloading ? '正在生成…' : '下载 PDF'}
@@ -446,17 +491,22 @@ export default function ResumeViewerPage() {
               </summary>
               <div className="absolute right-0 z-30 mt-2 w-56 border-2 border-black bg-white p-2 shadow-sw-lg">
                 {isTailoredResume && (
-                  <button type="button" onClick={handleInterviewPrep} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50">
-                    <MessagesSquare className="h-4 w-4" />面试准备
+                  <button
+                    type="button"
+                    onClick={handleInterviewPrep}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50"
+                  >
+                    <MessagesSquare className="h-4 w-4" />
+                    面试准备
                   </button>
                 )}
-                {isTailoredResume && parentResumeId && (
-                  <button type="button" onClick={() => router.push(`/compare?base=${encodeURIComponent(parentResumeId)}&tailored=${encodeURIComponent(resumeId)}`)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50">
-                    <Columns2 className="h-4 w-4" />查看 AI 修改记录
-                  </button>
-                )}
-                <button type="button" onClick={() => setShowDeleteDialog(true)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50">
-                  <Trash2 className="h-4 w-4" />删除简历
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteDialog(true)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  删除简历
                 </button>
               </div>
             </details>
@@ -507,6 +557,35 @@ export default function ResumeViewerPage() {
           </div>
         )}
 
+        {showSavedChanges && isTailoredResume && (
+          <section
+            className="no-print mb-4 border-2 border-black bg-white shadow-sw-default"
+            aria-label="生成时的简历改动"
+          >
+            <header className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-black p-4">
+              <div>
+                <p className="font-mono text-xs font-bold uppercase text-blue-700">生成记录</p>
+                <h3 className="mt-1 font-serif text-xl font-semibold">
+                  这份简历相对主简历改了什么
+                </h3>
+                <p className="mt-1 text-sm text-steel-grey">
+                  直接在当前页面核对，确认后继续微调或下载。
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setShowSavedChanges(false)}>
+                收起
+              </Button>
+            </header>
+            {savedChangesLoading ? (
+              <p className="p-4 font-mono text-sm text-steel-grey">正在读取原始简历…</p>
+            ) : savedChangesError ? (
+              <p className="p-4 text-sm text-red-700">{savedChangesError}</p>
+            ) : baseResumeData && resumeData ? (
+              <AiResumeChangePreview original={baseResumeData} proposal={resumeData} />
+            ) : null}
+          </section>
+        )}
+
         {/* JD, resume, and conversational editing stay in one working surface. */}
         <div
           className={`grid items-start gap-4 pb-4 ${
@@ -544,7 +623,9 @@ export default function ResumeViewerPage() {
                     {jobContext.content}
                   </p>
                 ) : jobContextError ? (
-                  <p className="text-sm leading-6 text-red-800">岗位 JD 暂时无法读取，请返回岗位列表重试。</p>
+                  <p className="text-sm leading-6 text-red-800">
+                    岗位 JD 暂时无法读取，请返回岗位列表重试。
+                  </p>
                 ) : (
                   <p className="text-sm text-steel-grey">正在加载岗位 JD…</p>
                 )}
@@ -635,7 +716,6 @@ export default function ResumeViewerPage() {
             </div>
           )}
         </div>
-
       </div>
 
       {deleteDialogs}
