@@ -27,7 +27,7 @@ Resume Job Agent 是一个本地优先的求职工作流：一句话寻找岗位
 
 ## 快速启动
 
-需要 Python 3.13+、Node.js 22+、`uv`、`pnpm`；PDF 导出还需要 Chrome/Chromium。
+需要 Node.js 22+、`uv`、`pnpm`；PDF 导出还需要 Chrome/Chromium。系统 Python 版本较旧时，`uv` 会自动准备 Python 3.13。
 
 ```bash
 git clone https://github.com/WhiteSailLabs/resume-job-agent.git

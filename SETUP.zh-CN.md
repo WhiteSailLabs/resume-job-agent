@@ -2,7 +2,7 @@
 
 ## 本地一键启动
 
-先安装 Python 3.13+、Node.js 22+、[`uv`](https://docs.astral.sh/uv/)、[`pnpm`](https://pnpm.io/installation) 和 Git，然后执行：
+先安装 Node.js 22+、[`uv`](https://docs.astral.sh/uv/)、[`pnpm`](https://pnpm.io/installation) 和 Git；需要时 `uv` 会自动准备 Python 3.13。然后执行：
 
 ```bash
 git clone https://github.com/WhiteSailLabs/resume-job-agent.git

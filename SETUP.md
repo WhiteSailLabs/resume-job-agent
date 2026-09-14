@@ -2,7 +2,7 @@
 
 ## Local one-command setup
 
-Install Python 3.13+, Node.js 22+, [`uv`](https://docs.astral.sh/uv/), [`pnpm`](https://pnpm.io/installation), and Git. Then run:
+Install Node.js 22+, [`uv`](https://docs.astral.sh/uv/), [`pnpm`](https://pnpm.io/installation), and Git. `uv` will provide Python 3.13 when needed. Then run:
 
 ```bash
 git clone https://github.com/WhiteSailLabs/resume-job-agent.git

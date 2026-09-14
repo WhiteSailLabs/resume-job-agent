@@ -27,7 +27,7 @@ The project does not bypass CAPTCHA, security verification, login, or rate limit
 
 ## Quick start
 
-Requirements: Python 3.13+, Node.js 22+, `uv`, `pnpm`, and Chrome/Chromium for PDF export.
+Requirements: Node.js 22+, `uv`, `pnpm`, and Chrome/Chromium for PDF export. `uv` automatically provides Python 3.13 when the system Python is older.
 
 ```bash
 git clone https://github.com/WhiteSailLabs/resume-job-agent.git

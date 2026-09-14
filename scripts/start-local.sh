@@ -22,16 +22,12 @@ require_command() {
   fi
 }
 
-require_command python3 "Install Python 3.13 or newer: https://www.python.org/downloads/"
 require_command uv "Install uv: https://docs.astral.sh/uv/getting-started/installation/"
 require_command node "Install Node.js 22 or newer: https://nodejs.org/"
 require_command pnpm "Install pnpm: https://pnpm.io/installation"
 
-python3 - <<'PY'
-import sys
-if sys.version_info < (3, 13):
-    raise SystemExit("Python 3.13 or newer is required.")
-PY
+# `uv sync` reads the project's `requires-python` constraint and downloads a
+# managed Python 3.13 runtime when the system Python is older (common on macOS).
 
 node -e 'const major=Number(process.versions.node.split(".")[0]); if(major<22){console.error("Node.js 22 or newer is required."); process.exit(1)}'
 
