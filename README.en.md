@@ -8,6 +8,21 @@ Resume Job Agent connects the work that most resume tools leave fragmented: disc
 
 If you want a job-search agent that **does not auto-apply, fabricate experience, or silently upload your data**, consider leaving a ⭐. It helps contributors discover the project.
 
+## Project identity and contributor attribution
+
+This project is a derivative of [Resume Matcher](https://github.com/srbhr/Resume-Matcher) and intentionally preserves its full Git history. GitHub therefore lists Resume Matcher's original authors and historical contributors. They built the resume data model, editor, preview, and PDF-export foundation retained by this project.
+
+**WhiteSailLabs added and reworked:**
+
+- Natural-language job discovery and job-link import for China job sites.
+- Full-JD persistence, review, human approval, and batch selection.
+- A batch-tailoring agent constrained by facts in the master resume.
+- Recoverable progress, quality checks, red/blue diffs, and chat refinement.
+- A tailored-resume library organized by company and role.
+- Local-first provider configuration, encrypted keys, and explicit browser-authorization boundaries.
+
+[jobfindsme](https://github.com/russeell/jobfindsme) is used only behind a dedicated job-discovery adapter; it does not replace or duplicate Resume Matcher's core resume system. Preserving history recognizes real contributions and keeps provenance auditable. It does not imply that every historical contributor worked on the features above. See [NOTICE](NOTICE) for details.
+
 ## The problem
 
 | Real-world friction | Typical workflow | Resume Job Agent |
@@ -87,7 +102,7 @@ Open <http://127.0.0.1:3000> and configure an LLM under **Settings**. See [SETUP
 
 ## Open-source foundation
 
-The product is built on [Resume Matcher](https://github.com/srbhr/Resume-Matcher), retaining its mature resume structure, editing, preview, and PDF capabilities. China job discovery is integrated through a thin adapter around [jobfindsme](https://github.com/russeell/jobfindsme). See [NOTICE](NOTICE) for attribution and modification details.
+The product is built on Resume Matcher, retaining its mature resume structure, editing, preview, and PDF capabilities. China job discovery is integrated through a thin adapter around jobfindsme. The upstream Git history, licenses, and contribution records are preserved; see [NOTICE](NOTICE) for attribution and modification details.
 
 ## Development
 

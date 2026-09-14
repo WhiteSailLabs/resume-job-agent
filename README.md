@@ -15,6 +15,21 @@ Resume Job Agent 想解决的是**整条投前工作流**：一句话描述目�
 
 如果你也想要一个**不替你乱投、不编造经历、数据留在本机**的求职 Agent，欢迎点一个 ⭐。你的 Star 会帮助更多贡献者看到这个项目。
 
+## 项目身份与贡献说明
+
+本项目是基于 [Resume Matcher](https://github.com/srbhr/Resume-Matcher) 的二次开发，并有意保留其完整 Git 历史。因此 GitHub Contributors 中会显示 Resume Matcher 的原作者和历史贡献者——他们构建了本项目沿用的简历数据结构、编辑、预览与 PDF 导出基础。
+
+**WhiteSailLabs 在上游基础上新增和重构了：**
+
+- 面向国内招聘场景的一句话岗位发现与岗位链接导入；
+- JD 保存、查看、人工审核与批量审批工作流；
+- 基于主简历事实边界的批量定制 Agent；
+- 可恢复任务进度、质量检查、红蓝差异预览与对话微调；
+- 按公司和岗位组织的定制简历库；
+- 本地优先的模型配置、密钥加密和招聘网站授权边界。
+
+[jobfindsme](https://github.com/russeell/jobfindsme) 仅通过独立适配层提供国内岗位发现能力，没有替换或复制 Resume Matcher 的核心简历系统。保留历史是为了尊重真实贡献和方便审计，不表示所有历史贡献者都参与了上述新增功能。详细归属见 [NOTICE](NOTICE)。
+
 ## 为什么要做它？
 
 | 真实痛点 | 常见产品的处理方式 | Resume Job Agent |
@@ -97,7 +112,7 @@ cd resume-job-agent
 
 ## 技术基础
 
-项目以 [Resume Matcher](https://github.com/srbhr/Resume-Matcher) 为产品与代码基础，保留其成熟的简历结构、编辑、预览和 PDF 能力；国内岗位发现通过薄适配层接入 [jobfindsme](https://github.com/russeell/jobfindsme)。详细归属与修改说明见 [NOTICE](NOTICE)。
+项目以 Resume Matcher 为产品与代码基础，保留其成熟的简历结构、编辑、预览和 PDF 能力；国内岗位发现通过薄适配层接入 jobfindsme。我们保留上游 Git 历史、许可证与贡献记录，详细归属和修改说明见 [NOTICE](NOTICE)。
 
 ## 开发与测试
 
